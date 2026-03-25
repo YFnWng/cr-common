@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Protocol, runtime_checkable
+from typing import Dict, Optional, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -14,10 +14,11 @@ class SofaGroundTruth:
     Populated by ``sofa.bridge.reader.SofaReader`` and passed to sensors.
     """
 
-    frame_poses: np.ndarray    # (n_frames, 7) Rigid3d [x,y,z,qx,qy,qz,qw]
-    strain_coords: np.ndarray  # (n_sections, 3) estimation local-Z convention: [-κ_z, κ_y, τ_x]
-    base_pose: np.ndarray      # (7,)
-    cable_disp: float          # mm
+    frame_poses: np.ndarray             # (n_frames, 7) Rigid3d [x,y,z,qx,qy,qz,qw]
+    strain_coords: np.ndarray           # (n_sections, 3) estimation local-Z convention: [-κ_z, κ_y, τ_x]
+    base_pose: np.ndarray               # (7,)
+    cable_disp: float = 0.0             # mm (displacement-controlled mode)
+    cable_tension: Optional[float] = None  # N (force-controlled mode; None = displacement mode)
 
 
 @dataclass
