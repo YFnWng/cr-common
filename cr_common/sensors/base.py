@@ -19,6 +19,9 @@ class SofaGroundTruth:
     base_pose: np.ndarray               # (7,)
     cable_disp: float = 0.0             # mm (displacement-controlled mode)
     cable_tension: Optional[float] = None  # N (force-controlled mode; None = displacement mode)
+    contact_force_body: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    # Per-section contact force in the rod body frame (N), shape (n_sections, 3).
+    # Populated only when SofaReader is given constraint_solver and contact_listener.
 
 
 @dataclass

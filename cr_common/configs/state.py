@@ -19,8 +19,10 @@ class NodeState:
     pose: np.ndarray                        # (7,) [x,y,z, qx,qy,qz,qw] in world frame
     strain: np.ndarray                      # (3,) curvature/torsion [u1,u2,u3] (rad/mm)
     covariance: np.ndarray                  # (6,6) marginal pose covariance
-    velocity: Optional[np.ndarray] = None  # (6,) body-centric twist ϖ — dynamic variants
-    wrench: Optional[np.ndarray] = None    # (6,) [moment; force] in spatial frame — force variants
+    velocity: Optional[np.ndarray] = None        # (6,) body-centric twist ϖ — dynamic variants
+    wrench: Optional[np.ndarray] = None          # (6,) [moment; force] spatial frame — Ferguson variant
+    internal_force: Optional[np.ndarray] = None  # (3,) body-frame internal force N(k) — Kirchhoff force variant
+    contact_force: Optional[np.ndarray] = None   # (3,) lumped contact force F(k) on section k
 
     @property
     def position(self) -> np.ndarray:

@@ -43,7 +43,7 @@ class NoiseConfig:
     # Q1: 6×6 PSD for pose/velocity; Q3: 3×3 PSD for strain temporal evolution.
     velocity_std: float = 0.1       # ℝ⁶ body-centric twist (rad/s or mm/s)
     Q1: np.ndarray = field(
-        default_factory=lambda: np.eye(6) * 1e-4   # 6×6 velocity PSD
+        default_factory=lambda: np.eye(6) * 1e-4   # 6×6 acceleration PSD
     )
     Q3: np.ndarray = field(
         default_factory=lambda: np.eye(3) * 1e-5   # 3×3 strain temporal PSD
@@ -51,8 +51,17 @@ class NoiseConfig:
 
     # --- Quasi-static force (Ferguson 2026) ---
     # Internal wrench W ∈ ℝ⁶ mechanics soft constraint + cable tension.
-    wrench_std: float = 1e-3        # soft mechanics constraint (N·mm / N)
-    cable_tension_std: float = 0.5  # N — actuation uncertainty
+    Q4: np.ndarray = field(
+        default_factory=lambda: np.eye(6) * 1e-4   # 6×6 cosserat PSD
+    )
+    Q5: np.ndarray = field(
+        default_factory=lambda: np.eye(3) * 1e-3   # 3×3 external wrench spatial PSD
+    )
+    wrench_std: float = 1e-3        # legacy 6-DOF soft mechanics constraint
+    moment_equilibrium_std: float = 1e-2   # Nm  — 3-DOF moment balance residual σ
+    force_equilibrium_std: float = 1e-2    # N  — 3-DOF force equilibrium between-factor σ
+    contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
+    cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
 
     # ------------------------------------------------------------------ #
     @property
@@ -98,21 +107,29 @@ class NoiseConfig:
         return np.diag([s**2] * 6)
 
     @property
+    def moment_equilibrium_cov(self) -> np.ndarray:
+        s = self.moment_equilibrium_std
+        return np.diag([s**2] * 3)
+
+    @property
+    def force_equilibrium_cov(self) -> np.ndarray:
+        s = self.force_equilibrium_std
+        return np.diag([s**2] * 3)
+
+    @property
+    def contact_force_cov(self) -> np.ndarray:
+        s = self.contact_force_std
+        return np.diag([s**2] * 3)
+
+    def cable_tensions_cov(self, n_tendons: int) -> np.ndarray:
+        """Diagonal covariance for a vector of n_tendons cable tensions."""
+        s = self.cable_tension_std
+        return np.diag([s**2] * n_tendons)
+
+    @property
     def cable_tension_cov(self) -> np.ndarray:
         s = self.cable_tension_std
         return np.array([[s**2]])
-
-    def make_Q9(self, ds: float) -> np.ndarray:
-        """Build the 9×9 GP-derived covariance for one rod section (eq. 22, Lilge 2022).
-
-        State ordering: [ω(0:3), v(3:6), κ(6:9)] — GTSAM Pose3 then curvature.
-        Q_r (rotational) and Q_t (translational) are extracted from the diagonal
-        of ``self.Qc``, which is already in [ω, v] order.
-        """
-        from ..factors.spatial_kinematics_factor import make_Q9
-        Q_r = self.Qc[0:3, 0:3]
-        Q_t = self.Qc[3:6, 3:6]
-        return make_Q9(Q_r, Q_t, ds)
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -130,6 +147,15 @@ class NoiseConfig:
         mri = sensors.get("mri_coils", {})
         fbg = sensors.get("fbg", {})
 
+        # cable_tension_std: actuation.force sub-dict takes precedence over noise section
+        act = cfg.get("actuation", {})
+        cable_mode = act.get("cable_mode", "displacement")
+        mode_cfg = act.get(cable_mode, {})
+        cable_tension_std = float(
+            mode_cfg.get("cable_tension_std",
+                         noise.get("cable_tension_std", 0.5))
+        )
+
         return cls(
             Qc=Qc,
             base_pose_std=float(noise.get("base_pose_std", 1e-3)),
@@ -140,7 +166,10 @@ class NoiseConfig:
             tip_strain_std=float(noise.get("tip_strain_std", 0.05)),
             velocity_std=float(noise.get("velocity_std", 0.1)),
             wrench_std=float(noise.get("wrench_std", 1e-3)),
-            cable_tension_std=float(noise.get("cable_tension_std", 0.5)),
+            moment_equilibrium_std=float(noise.get("moment_equilibrium_std", 1e-2)),
+            force_equilibrium_std=float(noise.get("force_equilibrium_std", 1e-2)),
+            contact_force_std=float(noise.get("contact_force_std", 10.0)),
+            cable_tension_std=cable_tension_std,
         )
 
     @classmethod
