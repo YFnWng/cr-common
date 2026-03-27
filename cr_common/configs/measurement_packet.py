@@ -43,6 +43,7 @@ class MeasurementPacket:
     base_pose: Optional[np.ndarray]
     cable_disp: Optional[float] = None
     cable_tension: Optional[float] = None
+    cable_tensions: Optional[np.ndarray] = None  # shape (n_cables,); preferred for multi-cable
     positions: Dict[int, np.ndarray] = field(default_factory=dict)
     poses: Dict[int, np.ndarray] = field(default_factory=dict)
     strains: Dict[int, np.ndarray] = field(default_factory=dict)

@@ -1,27 +1,14 @@
-"""Abstract sensor protocol and shared data structures."""
+"""Abstract sensor protocol and shared data structures.
+
+``SofaGroundTruth`` lives in ``state_estimation.sofa.bridge.packet``
+to keep this module free of SOFA-specific types.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Protocol, runtime_checkable
+from typing import Dict, Protocol, runtime_checkable
 
 import numpy as np
-
-
-@dataclass
-class SofaGroundTruth:
-    """Raw simulation state extracted from SOFA before any noise injection.
-
-    Populated by ``sofa.bridge.reader.SofaReader`` and passed to sensors.
-    """
-
-    frame_poses: np.ndarray             # (n_frames, 7) Rigid3d [x,y,z,qx,qy,qz,qw]
-    strain_coords: np.ndarray           # (n_sections, 3) estimation local-Z convention: [-κ_z, κ_y, τ_x]
-    base_pose: np.ndarray               # (7,)
-    cable_disp: float = 0.0             # mm (displacement-controlled mode)
-    cable_tension: Optional[float] = None  # N (force-controlled mode; None = displacement mode)
-    contact_force_body: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
-    # Per-section contact force in the rod body frame (N), shape (n_sections, 3).
-    # Populated only when SofaReader is given constraint_solver and contact_listener.
 
 
 @dataclass
@@ -56,7 +43,7 @@ class AbstractSensor(Protocol):
 
     def observe(
         self,
-        sofa_gt: SofaGroundTruth,
+        sofa_gt,
         t: float,
         dt: float,
     ) -> SensorReadings:
@@ -72,7 +59,7 @@ class SensorSuite:
 
     def observe(
         self,
-        sofa_gt: SofaGroundTruth,
+        sofa_gt,
         t: float,
         dt: float,
     ) -> SensorReadings:
