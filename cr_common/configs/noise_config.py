@@ -58,8 +58,14 @@ class NoiseConfig:
         default_factory=lambda: np.eye(3) * 1e-3   # 3×3 external wrench spatial PSD
     )
     wrench_std: float = 1e-3        # legacy 6-DOF soft mechanics constraint
-    moment_equilibrium_std: float = 1e-2   # Nm  — 3-DOF moment balance residual σ
-    force_equilibrium_std: float = 1e-2    # N  — 3-DOF force equilibrium between-factor σ
+    moment_equilibrium_std: float = 1e-2   # N·mm — 3-DOF moment ODE residual σ (discretization noise)
+    force_equilibrium_std: float = 1e-2    # N   — 3-DOF force ODE residual σ
+    # Tip boundary condition: exact physical constraint (no discretization error).
+    # Much tighter than ODE noise; anchors the tip and lets the Cosserat moment
+    # chain determine all 33 strain nodes without a free zigzag parameter.
+    # bc_moment_std << moment_equilibrium_std to suppress the alternating null-space.
+    bc_moment_std: float = 0.1             # N·mm — tip BC moment residual σ
+    bc_force_std: float = 0.1             # N   — tip BC force residual σ
     contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
 
@@ -117,6 +123,16 @@ class NoiseConfig:
         return np.diag([s**2] * 3)
 
     @property
+    def bc_moment_cov(self) -> np.ndarray:
+        s = self.bc_moment_std
+        return np.diag([s**2] * 3)
+
+    @property
+    def bc_force_cov(self) -> np.ndarray:
+        s = self.bc_force_std
+        return np.diag([s**2] * 3)
+
+    @property
     def contact_force_cov(self) -> np.ndarray:
         s = self.contact_force_std
         return np.diag([s**2] * 3)
@@ -168,6 +184,8 @@ class NoiseConfig:
             wrench_std=float(noise.get("wrench_std", 1e-3)),
             moment_equilibrium_std=float(noise.get("moment_equilibrium_std", 1e-2)),
             force_equilibrium_std=float(noise.get("force_equilibrium_std", 1e-2)),
+            bc_moment_std=float(noise.get("bc_moment_std", 0.1)),
+            bc_force_std=float(noise.get("bc_force_std", 0.1)),
             contact_force_std=float(noise.get("contact_force_std", 10.0)),
             cable_tension_std=cable_tension_std,
         )

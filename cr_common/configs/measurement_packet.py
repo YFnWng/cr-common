@@ -33,7 +33,13 @@ class MeasurementPacket:
     poses : dict[int, np.ndarray]
         node_index → (7,) observed pose [x,y,z,qx,qy,qz,qw].  From EM coils.
     strains : dict[int, np.ndarray]
-        section_index → (3,) observed curvature [u1,u2,u3].  From FBG.
+        section_index → (3,) observed midpoint curvature [u1,u2,u3].  From FBG.
+        Becomes a midpoint factor: ``(S(k)+S(k+1))/2 = κ_obs[k]``.
+    node_strains : dict[int, np.ndarray]
+        node_index → (3,) observed curvature [u1,u2,u3].  Direct node prior.
+        Becomes a ``PriorFactorVector(S(k), κ_obs)``.  Useful when a sensor
+        directly measures curvature at a specific backbone node rather than
+        a section midpoint.
     wrenches : dict[int, np.ndarray]
         node_index → (6,) observed wrench [moment; force].  From F/T sensors.
     """
@@ -47,4 +53,5 @@ class MeasurementPacket:
     positions: Dict[int, np.ndarray] = field(default_factory=dict)
     poses: Dict[int, np.ndarray] = field(default_factory=dict)
     strains: Dict[int, np.ndarray] = field(default_factory=dict)
+    node_strains: Dict[int, np.ndarray] = field(default_factory=dict)
     wrenches: Dict[int, np.ndarray] = field(default_factory=dict)

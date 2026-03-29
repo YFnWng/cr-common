@@ -10,14 +10,15 @@ import yaml
 class RodConfig:
     """Geometric and mechanical parameters of a single Cosserat rod.
 
-    All lengths in mm, forces in N, angles in rad.
+    All values in SI units: metres, Pa, N, rad/m.
+    YAML config stores values in SI directly.
     """
 
-    length: float               # total arc length (mm)
+    length: float               # total arc length (m)
     n_sections: int = 32        # number of sections (strain variables)
     young_modulus: float = 8e5  # Pa
     poisson_ratio: float = 0.38
-    beam_radius: float = 1.45   # mm
+    beam_radius: float = 0.00145  # m
     kirchhoff: bool = True      # True → lock shear/extension DOF (3-DOF strain)
 
     # Base pose as a 4×4 homogeneous matrix; default = identity (origin, aligned with Z)
@@ -26,14 +27,11 @@ class RodConfig:
     )
 
     # Tendon routing geometry (Rucker & Webster 2011).
-    # All coordinates in the body frame, units mm.
+    # All coordinates in the body frame, units m.
     # For straight tendons (SOFA default): d_offsets = dd_offsets = zeros.
-    # For curved routing: supply the derivatives dr_i/ds and d²r_i/ds² evaluated
-    # at each section — the factor code uses the *constant* values stored here,
-    # so update them per-node if the routing is arc-length-dependent.
     tendon_offsets: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 2), dtype=float)
-    )  # (n_tendons, 2)  [x_i, y_i] offset in cross-section (mm)
+    )  # (n_tendons, 2)  [x_i, y_i] offset in cross-section (m)
     tendon_d_offsets: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 2), dtype=float)
     )  # (n_tendons, 2)  dr_i/ds  — zero for straight routing
@@ -54,7 +52,7 @@ class RodConfig:
 
     @property
     def section_length(self) -> float:
-        """Arc length of each uniform section (mm)."""
+        """Arc length of each uniform section (m)."""
         return self.length / self.n_sections
 
     @property
@@ -63,27 +61,27 @@ class RodConfig:
         return 3 if self.kirchhoff else 6
 
     # ------------------------------------------------------------------ #
-    # Cross-section geometry and stiffness
+    # Cross-section geometry and stiffness (all SI)
     # ------------------------------------------------------------------ #
 
     @property
     def cross_section_area(self) -> float:
-        """Cross-sectional area A = π r²  (mm²)."""
+        """Cross-sectional area A = π r²  (m²)."""
         return np.pi * self.beam_radius ** 2
 
     @property
     def second_moment_of_area(self) -> float:
-        """Second moment of area I = π r⁴ / 4  (mm⁴)."""
+        """Second moment of area I = π r⁴ / 4  (m⁴)."""
         return np.pi * self.beam_radius ** 4 / 4.0
 
     @property
     def polar_moment_of_area(self) -> float:
-        """Polar second moment of area J = π r⁴ / 2 = 2I  (mm⁴)."""
+        """Polar second moment of area J = π r⁴ / 2 = 2I  (m⁴)."""
         return np.pi * self.beam_radius ** 4 / 2.0
 
     @property
     def shear_modulus(self) -> float:
-        """Shear modulus G = E / (2(1 + ν))."""
+        """Shear modulus G = E / (2(1 + ν))  (Pa)."""
         return self.young_modulus / (2.0 * (1.0 + self.poisson_ratio))
 
     @property
@@ -98,26 +96,21 @@ class RodConfig:
 
     @property
     def stiffness_matrix(self) -> np.ndarray:
-        """Cross-section constitutive stiffness matrix K.
+        """Cross-section constitutive stiffness matrix K  (SI: N·m²).
 
         Relates generalised strain ε to internal wrench σ = K ε.
-        Ordered to match the GTSAM/Lilge [ω, v] Lie algebra convention
-        (rotational DOF first, translational DOF last):
 
         Kirchhoff (3×3, ε = [κ₁, κ₂, τ]):
-            K = diag([EI, EI, GJ])
+            K = diag([EI, EI, GJ])       units: N·m²
 
         Full Cosserat (6×6, ε = [κ₁, κ₂, τ, γ₁, γ₂, ε_z]):
             K = diag([EI, EI, GJ, κ_s·GA, κ_s·GA, EA])
-
-        Units: bending/torsion stiffness in N·mm²  (with lengths in mm, E in N/mm²).
-               shear/axial stiffness in N.
         """
-        E  = self.young_modulus
-        G  = self.shear_modulus
-        I  = self.second_moment_of_area
-        J  = self.polar_moment_of_area
-        A  = self.cross_section_area
+        E  = self.young_modulus          # Pa = N/m²
+        G  = self.shear_modulus          # Pa
+        I  = self.second_moment_of_area  # m⁴
+        J  = self.polar_moment_of_area   # m⁴
+        A  = self.cross_section_area     # m²
         ks = self.shear_correction_factor
 
         EI = E * I
@@ -142,11 +135,11 @@ class RodConfig:
             cfg = yaml.safe_load(f)
         rod = cfg.get("rod", {})
         return cls(
-            length=float(rod.get("length", 160.0)),
+            length=float(rod.get("length", 0.16)),
             n_sections=int(rod.get("n_sections", 32)),
             young_modulus=float(rod.get("young_modulus", 8e5)),
             poisson_ratio=float(rod.get("poisson_ratio", 0.38)),
-            beam_radius=float(rod.get("beam_radius", 1.45)),
+            beam_radius=float(rod.get("beam_radius", 0.00145)),
             kirchhoff=bool(rod.get("kirchhoff", True)),
         )
 
