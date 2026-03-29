@@ -67,6 +67,7 @@ class NoiseConfig:
     bc_moment_std: float = 0.1             # N·mm — tip BC moment residual σ
     bc_force_std: float = 0.1             # N   — tip BC force residual σ
     contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
+    tip_contact_force_std: float = 10.0   # N  — looser prior for tip node (allows concentrated contact)
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
 
     # ------------------------------------------------------------------ #
@@ -137,6 +138,11 @@ class NoiseConfig:
         s = self.contact_force_std
         return np.diag([s**2] * 3)
 
+    @property
+    def tip_contact_force_cov(self) -> np.ndarray:
+        s = self.tip_contact_force_std
+        return np.diag([s**2] * 3)
+
     def cable_tensions_cov(self, n_tendons: int) -> np.ndarray:
         """Diagonal covariance for a vector of n_tendons cable tensions."""
         s = self.cable_tension_std
@@ -187,6 +193,8 @@ class NoiseConfig:
             bc_moment_std=float(noise.get("bc_moment_std", 0.1)),
             bc_force_std=float(noise.get("bc_force_std", 0.1)),
             contact_force_std=float(noise.get("contact_force_std", 10.0)),
+            tip_contact_force_std=float(noise.get("tip_contact_force_std",
+                                                    noise.get("contact_force_std", 10.0))),
             cable_tension_std=cable_tension_std,
         )
 
