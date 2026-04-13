@@ -69,6 +69,7 @@ class NoiseConfig:
     contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
     tip_contact_force_std: float = 10.0   # N  — looser prior for tip node (allows concentrated contact)
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
+    temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
 
     # ------------------------------------------------------------------ #
     @property
@@ -196,6 +197,7 @@ class NoiseConfig:
             tip_contact_force_std=float(noise.get("tip_contact_force_std",
                                                     noise.get("contact_force_std", 10.0))),
             cable_tension_std=cable_tension_std,
+            temporal_strain_std=float(noise.get("temporal_strain_std", 0.0)),
         )
 
     @classmethod
