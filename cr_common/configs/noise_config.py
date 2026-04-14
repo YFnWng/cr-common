@@ -71,6 +71,11 @@ class NoiseConfig:
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
     temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
 
+    # --- Proximal-boundary identification (Wang manuscript) ---
+    theta_prior_std: float = 10.0          # loose zero-mean prior on θ
+    temporal_pose_std: float = 0.01        # m/rad — weak continuity on X across time steps
+    temporal_force_std: float = 0.0        # N — temporal smoothing on N/F; 0 = disabled
+
     # ------------------------------------------------------------------ #
     @property
     def base_pose_cov(self) -> np.ndarray:
@@ -149,6 +154,17 @@ class NoiseConfig:
         s = self.cable_tension_std
         return np.diag([s**2] * n_tendons)
 
+    def theta_prior_cov(self, theta_dim: int) -> np.ndarray:
+        """Diagonal covariance for the θ prior (proximal-boundary parameters)."""
+        s = self.theta_prior_std
+        return np.diag([s**2] * theta_dim)
+
+    @property
+    def temporal_pose_cov(self) -> np.ndarray:
+        """6×6 diagonal covariance for the temporal pose continuity prior."""
+        s = self.temporal_pose_std
+        return np.diag([s**2] * 6)
+
     @property
     def cable_tension_cov(self) -> np.ndarray:
         s = self.cable_tension_std
@@ -198,6 +214,9 @@ class NoiseConfig:
                                                     noise.get("contact_force_std", 10.0))),
             cable_tension_std=cable_tension_std,
             temporal_strain_std=float(noise.get("temporal_strain_std", 0.0)),
+            theta_prior_std=float(noise.get("theta_prior_std", 10.0)),
+            temporal_pose_std=float(noise.get("temporal_pose_std", 0.01)),
+            temporal_force_std=float(noise.get("temporal_force_std", 0.0)),
         )
 
     @classmethod

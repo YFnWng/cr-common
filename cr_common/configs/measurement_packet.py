@@ -42,6 +42,11 @@ class MeasurementPacket:
         a section midpoint.
     wrenches : dict[int, np.ndarray]
         node_index → (6,) observed wrench [moment; force].  From F/T sensors.
+    base_commands : np.ndarray, shape (n_base_commands,), optional
+        Proximal actuator commands u_ext (e.g. insertion translation, base
+        rotation).  Used by the proximal-boundary factor as the ``u_ext``
+        portion of ``u_act = [Q; u_ext]``.  ``None`` means the proximal
+        boundary factor is not used or there are no external base commands.
     """
 
     timestamp: float
@@ -55,3 +60,4 @@ class MeasurementPacket:
     strains: Dict[int, np.ndarray] = field(default_factory=dict)
     node_strains: Dict[int, np.ndarray] = field(default_factory=dict)
     wrenches: Dict[int, np.ndarray] = field(default_factory=dict)
+    base_commands: Optional[np.ndarray] = None

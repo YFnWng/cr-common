@@ -39,6 +39,26 @@ class RodConfig:
         default_factory=lambda: np.zeros((0, 2), dtype=float)
     )  # (n_tendons, 2)  d²r_i/ds² — zero for straight routing
 
+    # ------------------------------------------------------------------ #
+    # Proximal boundary identification (Wang manuscript)
+    # ------------------------------------------------------------------ #
+
+    # Actuator reference pose (SE(3)) used to compute ξ = Log(X_ref⁻¹·X(0))
+    # in the basis dictionary.  Defaults to identity → ξ is the body-frame
+    # log of X(0) relative to the world origin.
+    X_ref: np.ndarray = field(
+        default_factory=lambda: np.eye(4, dtype=float)
+    )  # (4, 4) homogeneous matrix
+
+    # Dimension of u_ext (base-actuator external commands, e.g. insertion
+    # translation, base rotation).  Concatenated with Q to form u_act.
+    n_base_commands: int = 0
+
+    # SOFA node index at which the estimator's proximal boundary lives.
+    # 0 → full rod (matches existing qs_force behaviour).  >0 → partial
+    # rod; estimator covers SOFA nodes [proximal_node_idx .. n_nodes-1].
+    proximal_node_idx: int = 0
+
     @property
     def n_tendons(self) -> int:
         """Number of tendons."""
@@ -59,6 +79,58 @@ class RodConfig:
     def strain_dim(self) -> int:
         """Dimension of the strain variable per section (3 for Kirchhoff, 6 otherwise)."""
         return 3 if self.kirchhoff else 6
+
+    @property
+    def n_est_nodes(self) -> int:
+        """Number of nodes in the estimator's partial-rod graph.
+
+        Equals ``n_nodes - proximal_node_idx``.  When ``proximal_node_idx=0``
+        this equals ``n_nodes`` (full rod).
+        """
+        return self.n_nodes - int(self.proximal_node_idx)
+
+    def theta_dim(self, terms_enabled: "dict[str, bool] | None" = None) -> int:
+        """Dimension of the proximal-boundary parameter vector θ.
+
+        ``terms_enabled`` is a dict of the basis-dictionary toggles from the
+        YAML (``bias``, ``linear_xi``, ``linear_s``, ``linear_u``, ``quad_xi_xi``,
+        ``cross_xi_s``, ``cross_xi_u``, ``quad_s_s``, ``cross_s_u``,
+        ``quad_u_u``).  If ``None``, assumes all terms enabled.
+
+        Let m = ``n_tendons + n_base_commands`` (control-input dimension).
+        Each enabled term contributes to θ as follows:
+
+            bias         : 6
+            linear_xi    : 36
+            linear_s     : 18
+            linear_u     : 6m
+            quad_xi_xi   : 126   (6 × vech(ξξᵀ) with dim(vech) = 21)
+            cross_xi_s   : 108   (6 × 18)
+            cross_xi_u   : 36m
+            quad_s_s     : 36    (6 × vech(ssᵀ) with dim(vech) = 6)
+            cross_s_u    : 18m
+            quad_u_u     : 3m(m+1)   (6 × m(m+1)/2)
+        """
+        m = int(self.n_tendons) + int(self.n_base_commands)
+        if terms_enabled is None:
+            terms_enabled = {k: True for k in (
+                "bias", "linear_xi", "linear_s", "linear_u",
+                "quad_xi_xi", "cross_xi_s", "cross_xi_u",
+                "quad_s_s", "cross_s_u", "quad_u_u",
+            )}
+        dims = {
+            "bias":       6,
+            "linear_xi":  36,
+            "linear_s":   18,
+            "linear_u":   6 * m,
+            "quad_xi_xi": 126,
+            "cross_xi_s": 108,
+            "cross_xi_u": 36 * m,
+            "quad_s_s":   36,
+            "cross_s_u":  18 * m,
+            "quad_u_u":   3 * m * (m + 1),
+        }
+        return sum(d for k, d in dims.items() if terms_enabled.get(k, False))
 
     # ------------------------------------------------------------------ #
     # Cross-section geometry and stiffness (all SI)
@@ -134,6 +206,15 @@ class RodConfig:
         with open(path) as f:
             cfg = yaml.safe_load(f)
         rod = cfg.get("rod", {})
+
+        X_ref_raw = rod.get("X_ref", None)
+        if X_ref_raw is not None:
+            X_ref = np.asarray(X_ref_raw, dtype=float)
+            if X_ref.shape != (4, 4):
+                raise ValueError(f"rod.X_ref must be 4x4, got {X_ref.shape}")
+        else:
+            X_ref = np.eye(4, dtype=float)
+
         return cls(
             length=float(rod.get("length", 0.16)),
             n_sections=int(rod.get("n_sections", 32)),
@@ -141,6 +222,9 @@ class RodConfig:
             poisson_ratio=float(rod.get("poisson_ratio", 0.38)),
             beam_radius=float(rod.get("beam_radius", 0.00145)),
             kirchhoff=bool(rod.get("kirchhoff", True)),
+            X_ref=X_ref,
+            n_base_commands=int(rod.get("n_base_commands", 0)),
+            proximal_node_idx=int(rod.get("proximal_node_idx", 0)),
         )
 
     @classmethod
