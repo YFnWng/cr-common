@@ -68,6 +68,13 @@ class NoiseConfig:
     bc_force_std: float = 0.1             # N   — tip BC force residual σ
     contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
     tip_contact_force_std: float = 10.0   # N  — looser prior for tip node (allows concentrated contact)
+    # Huber-robust F prior: when > 0, the zero-centered F prior uses a Huber
+    # m-estimator with threshold ``contact_force_huber_k`` (whitening units, i.e.
+    # multiples of contact_force_std).  Residuals below the threshold incur
+    # quadratic cost (sparsity pressure toward F ≈ 0); residuals above it incur
+    # linear cost (no Gaussian blow-up for genuine contact).  0 disables → pure
+    # Gaussian.  Typical value: 1.0 – 3.0.
+    contact_force_huber_k: float = 0.0
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
     temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
 
@@ -212,6 +219,7 @@ class NoiseConfig:
             contact_force_std=float(noise.get("contact_force_std", 10.0)),
             tip_contact_force_std=float(noise.get("tip_contact_force_std",
                                                     noise.get("contact_force_std", 10.0))),
+            contact_force_huber_k=float(noise.get("contact_force_huber_k", 0.0)),
             cable_tension_std=cable_tension_std,
             temporal_strain_std=float(noise.get("temporal_strain_std", 0.0)),
             theta_prior_std=float(noise.get("theta_prior_std", 10.0)),
