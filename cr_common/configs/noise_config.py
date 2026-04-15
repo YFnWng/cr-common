@@ -77,6 +77,14 @@ class NoiseConfig:
     contact_force_huber_k: float = 0.0
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
     temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
+    # When True, the 9-DOF Lilge kinematics factor uses a *decoupled* Q9 with
+    # the pose ↔ strain cross-terms zeroed (i.e. block-diagonal rather than
+    # full GP).  This treats pose-integration noise and strain-smoothness as
+    # independent — sometimes preferable when ``Qc_rotation`` and
+    # ``Qc_translation`` differ by many orders of magnitude (the cross terms
+    # then dominate one direction and over-couple the two channels).  When
+    # False (default), uses the original Lilge eq. 22 GP-derived Q9.
+    kin_factor_decoupled: bool = False
 
     # --- Proximal-boundary identification (Wang manuscript) ---
     theta_prior_std: float = 10.0          # loose zero-mean prior on θ
@@ -222,6 +230,7 @@ class NoiseConfig:
             contact_force_huber_k=float(noise.get("contact_force_huber_k", 0.0)),
             cable_tension_std=cable_tension_std,
             temporal_strain_std=float(noise.get("temporal_strain_std", 0.0)),
+            kin_factor_decoupled=bool(noise.get("kin_factor_decoupled", False)),
             theta_prior_std=float(noise.get("theta_prior_std", 10.0)),
             temporal_pose_std=float(noise.get("temporal_pose_std", 0.01)),
             temporal_force_std=float(noise.get("temporal_force_std", 0.0)),
