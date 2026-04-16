@@ -68,6 +68,14 @@ class NoiseConfig:
     bc_force_std: float = 0.1             # N   — tip BC force residual σ
     contact_force_std: float = 10.0        # N  — weak prior on lumped contact force F(k)
     tip_contact_force_std: float = 10.0   # N  — looser prior for tip node (allows concentrated contact)
+    # Zero-centered prior on the base internal force N(0).  Breaks the
+    # approximate constant-δ shift null space of the N chain (shifting
+    # every N(k) by a common vector leaves the Cosserat ODE nearly
+    # invariant, O(κ·ds·δ) coupling).  Centered at zero (not at
+    # ``[0,0,-Q_total]``) so it doesn't bias N away from the truth when
+    # external tip/contact forces cause transverse reactions at the base.
+    # σ = 0 disables the prior entirely.
+    n0_prior_std: float = 50.0             # N — isotropic std on N(0) ≈ 0
     # Huber-robust F prior: when > 0, the zero-centered F prior uses a Huber
     # m-estimator with threshold ``contact_force_huber_k`` (whitening units, i.e.
     # multiples of contact_force_std).  Residuals below the threshold incur
@@ -77,6 +85,13 @@ class NoiseConfig:
     contact_force_huber_k: float = 0.0
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
     temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
+    # Cold-start prior on the torsion component (S[2] = κ_z = u_z) only,
+    # added on the very first estimation step when there is no warm-start.
+    # Position-only sensors leave torsion structurally unobservable; without
+    # this nudge the cold solve picks an arbitrary u_z that then propagates
+    # via warm-starts on subsequent steps.  Bending channels (κ_x, κ_y) are
+    # left unconstrained (effectively infinite σ).  0 disables.
+    cold_start_torsion_std: float = 0.0
     # When True, the 9-DOF Lilge kinematics factor uses a *decoupled* Q9 with
     # the pose ↔ strain cross-terms zeroed (i.e. block-diagonal rather than
     # full GP).  This treats pose-integration noise and strain-smoothness as
@@ -228,8 +243,10 @@ class NoiseConfig:
             tip_contact_force_std=float(noise.get("tip_contact_force_std",
                                                     noise.get("contact_force_std", 10.0))),
             contact_force_huber_k=float(noise.get("contact_force_huber_k", 0.0)),
+            n0_prior_std=float(noise.get("n0_prior_std", 50.0)),
             cable_tension_std=cable_tension_std,
             temporal_strain_std=float(noise.get("temporal_strain_std", 0.0)),
+            cold_start_torsion_std=float(noise.get("cold_start_torsion_std", 0.0)),
             kin_factor_decoupled=bool(noise.get("kin_factor_decoupled", False)),
             theta_prior_std=float(noise.get("theta_prior_std", 10.0)),
             temporal_pose_std=float(noise.get("temporal_pose_std", 0.01)),
