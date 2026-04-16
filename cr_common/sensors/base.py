@@ -54,8 +54,9 @@ class AbstractSensor(Protocol):
 class SensorSuite:
     """Aggregates multiple sensors and merges their readings."""
 
-    def __init__(self, sensors: list) -> None:
+    def __init__(self, sensors: list, n_position_sensors: int = 0) -> None:
         self._sensors = list(sensors)
+        self.n_position_sensors = n_position_sensors
 
     def observe(
         self,
@@ -67,3 +68,63 @@ class SensorSuite:
         for sensor in self._sensors:
             merged.merge(sensor.observe(sofa_gt, t, dt))
         return merged
+
+    @classmethod
+    def from_yaml(cls, cfg: dict, n_sofa_nodes: int) -> "SensorSuite":
+        """Build a SensorSuite from the ``sensors`` section of a YAML config.
+
+        Lazily imports simulated sensor classes so this module stays free of
+        SOFA-specific imports at the module level.
+
+        Parameters
+        ----------
+        cfg : dict
+            Full parsed YAML config (expects ``cfg["sensors"]``).
+        n_sofa_nodes : int
+            Total number of SOFA rod nodes (= n_sections + 1).  Passed to
+            ``CoilConfig`` for frame-to-node mapping.
+        """
+        from .simulated.coil_sensor import CoilConfig, EMCoilSensor, MRICoilSensor
+        from .simulated.fbg_sensor import FBGConfig, FBGSensor
+
+        sensor_cfg = cfg.get("sensors", {})
+        em_cfg  = sensor_cfg.get("em_coils", {})
+        mri_cfg = sensor_cfg.get("mri_coils", {})
+        fbg_cfg = sensor_cfg.get("fbg", {})
+
+        sensors = []
+
+        em_indices = em_cfg.get("frame_indices", [])
+        if em_indices:
+            sensors.append(EMCoilSensor(
+                CoilConfig(
+                    frame_indices=em_indices,
+                    position_std=em_cfg.get("position_std", 1e-4),
+                    n_sofa_frames=n_sofa_nodes,
+                    n_estimation_nodes=n_sofa_nodes,
+                ),
+                orientation_std=em_cfg.get("orientation_std", 1.0) * np.pi / 180.0,
+            ))
+
+        mri_indices = mri_cfg.get("frame_indices", [])
+        if mri_indices:
+            sensors.append(MRICoilSensor(
+                CoilConfig(
+                    frame_indices=mri_indices,
+                    position_std=mri_cfg.get("position_std", 1e-4),
+                    n_sofa_frames=n_sofa_nodes,
+                    n_estimation_nodes=n_sofa_nodes,
+                ),
+            ))
+
+        fbg_sections = fbg_cfg.get("section_indices", [])
+        if fbg_sections:
+            sensors.append(FBGSensor(
+                FBGConfig(
+                    section_indices=fbg_sections,
+                    strain_std=fbg_cfg.get("strain_std", 10.0),
+                ),
+            ))
+
+        n_position_sensors = len(em_indices) + len(mri_indices)
+        return cls(sensors, n_position_sensors=n_position_sensors)

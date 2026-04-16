@@ -85,6 +85,8 @@ class NoiseConfig:
     contact_force_huber_k: float = 0.0
     cable_tension_std: float = 0.5         # N  — actuation uncertainty per tendon
     temporal_strain_std: float = 0.0       # rad/m — temporal smoothing; 0 = disabled
+    temporal_pose_std: float = 0.01        # m/rad — weak continuity on X across time steps
+    temporal_force_std: float = 0.0        # N — temporal smoothing on N/F; 0 = disabled
     # Cold-start prior on the torsion component (S[2] = κ_z = u_z) only,
     # added on the very first estimation step when there is no warm-start.
     # Position-only sensors leave torsion structurally unobservable; without
@@ -103,8 +105,7 @@ class NoiseConfig:
 
     # --- Proximal-boundary identification (Wang manuscript) ---
     theta_prior_std: float = 10.0          # loose zero-mean prior on θ
-    temporal_pose_std: float = 0.01        # m/rad — weak continuity on X across time steps
-    temporal_force_std: float = 0.0        # N — temporal smoothing on N/F; 0 = disabled
+    
 
     # ------------------------------------------------------------------ #
     @property
