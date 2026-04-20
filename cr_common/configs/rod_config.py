@@ -44,8 +44,8 @@ class RodConfig:
     # ------------------------------------------------------------------ #
 
     # Actuator reference pose (SE(3)) used to compute ξ = Log(X_ref⁻¹·X(0))
-    # in the basis dictionary.  Defaults to identity → ξ is the body-frame
-    # log of X(0) relative to the world origin.
+    # in the basis dictionary.  Set at runtime from the first observation;
+    # defaults to identity.
     X_ref: np.ndarray = field(
         default_factory=lambda: np.eye(4, dtype=float)
     )  # (4, 4) homogeneous matrix
@@ -207,14 +207,6 @@ class RodConfig:
             cfg = yaml.safe_load(f)
         rod = cfg.get("rod", {})
 
-        X_ref_raw = rod.get("X_ref", None)
-        if X_ref_raw is not None:
-            X_ref = np.asarray(X_ref_raw, dtype=float)
-            if X_ref.shape != (4, 4):
-                raise ValueError(f"rod.X_ref must be 4x4, got {X_ref.shape}")
-        else:
-            X_ref = np.eye(4, dtype=float)
-
         return cls(
             length=float(rod.get("length", 0.16)),
             n_sections=int(rod.get("n_sections", 32)),
@@ -222,7 +214,6 @@ class RodConfig:
             poisson_ratio=float(rod.get("poisson_ratio", 0.38)),
             beam_radius=float(rod.get("beam_radius", 0.00145)),
             kirchhoff=bool(rod.get("kirchhoff", True)),
-            X_ref=X_ref,
             n_base_commands=int(rod.get("n_base_commands", 0)),
             proximal_node_idx=int(rod.get("proximal_node_idx", 0)),
         )
