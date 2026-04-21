@@ -52,6 +52,7 @@ class RodConfig:
 
     # Dimension of u_ext (base-actuator external commands, e.g. insertion
     # translation, base rotation).  Concatenated with Q to form u_act.
+    # Set at runtime from the robot's control interface, not from YAML.
     n_base_commands: int = 0
 
     # SOFA node index at which the estimator's proximal boundary lives.
@@ -214,7 +215,6 @@ class RodConfig:
             poisson_ratio=float(rod.get("poisson_ratio", 0.38)),
             beam_radius=float(rod.get("beam_radius", 0.00145)),
             kirchhoff=bool(rod.get("kirchhoff", True)),
-            n_base_commands=int(rod.get("n_base_commands", 0)),
             proximal_node_idx=int(rod.get("proximal_node_idx", 0)),
         )
 
