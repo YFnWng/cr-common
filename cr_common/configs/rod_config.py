@@ -16,10 +16,24 @@ class RodConfig:
 
     length: float               # total arc length (m)
     n_sections: int = 32        # number of sections (strain variables)
-    young_modulus: float = 8e5  # Pa
+    young_modulus: float = 8e5  # Pa — default (overridden by stiffness_sections)
     poisson_ratio: float = 0.38
     beam_radius: float = 0.00145  # m
     kirchhoff: bool = True      # True → lock shear/extension DOF (3-DOF strain)
+
+    # Variable stiffness: per-section E and ν.
+    # If set, stiffness_matrix_at(k) returns the K for section k.
+    # node_indices marks segment boundaries (ascending); E/ν arrays
+    # have one value per segment.
+    stiffness_node_indices: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=int)
+    )  # (n_segments,) section indices where E/ν change
+    stiffness_young_moduli: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=float)
+    )  # (n_segments,) E per segment
+    stiffness_poisson_ratios: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=float)
+    )  # (n_segments,) or (1,) ν per segment (broadcast if length 1)
 
     # Base pose as a 4×4 homogeneous matrix; default = identity (origin, aligned with Z)
     base_pose: np.ndarray = field(
@@ -167,24 +181,29 @@ class RodConfig:
         nu = self.poisson_ratio
         return 6.0 * (1.0 + nu) / (7.0 + 6.0 * nu)
 
-    @property
-    def stiffness_matrix(self) -> np.ndarray:
-        """Cross-section constitutive stiffness matrix K  (SI: N·m²).
+    def _E_nu_at(self, section_idx: int):
+        """Return (E, ν) for a given section index."""
+        if len(self.stiffness_node_indices) == 0:
+            return self.young_modulus, self.poisson_ratio
+        # Find which segment this section belongs to
+        seg = 0
+        for i, boundary in enumerate(self.stiffness_node_indices):
+            if section_idx >= boundary:
+                seg = i
+        E = float(self.stiffness_young_moduli[seg])
+        if len(self.stiffness_poisson_ratios) == 1:
+            nu = float(self.stiffness_poisson_ratios[0])
+        else:
+            nu = float(self.stiffness_poisson_ratios[min(seg, len(self.stiffness_poisson_ratios) - 1)])
+        return E, nu
 
-        Relates generalised strain ε to internal wrench σ = K ε.
-
-        Kirchhoff (3×3, ε = [κ₁, κ₂, τ]):
-            K = diag([EI, EI, GJ])       units: N·m²
-
-        Full Cosserat (6×6, ε = [κ₁, κ₂, τ, γ₁, γ₂, ε_z]):
-            K = diag([EI, EI, GJ, κ_s·GA, κ_s·GA, EA])
-        """
-        E  = self.young_modulus          # Pa = N/m²
-        G  = self.shear_modulus          # Pa
-        I  = self.second_moment_of_area  # m⁴
-        J  = self.polar_moment_of_area   # m⁴
-        A  = self.cross_section_area     # m²
-        ks = self.shear_correction_factor
+    def _build_K(self, E: float, nu: float) -> np.ndarray:
+        """Build stiffness matrix K for given E and ν."""
+        G = E / (2.0 * (1.0 + nu))
+        I = self.second_moment_of_area
+        J = self.polar_moment_of_area
+        A = self.cross_section_area
+        ks = 6.0 * (1.0 + nu) / (7.0 + 6.0 * nu)
 
         EI = E * I
         GJ = G * J
@@ -192,12 +211,25 @@ class RodConfig:
             return np.diag([EI, EI, GJ])
         else:
             GA_s = ks * G * A
-            EA   = E * A
+            EA = E * A
             return np.diag([EI, EI, GJ, GA_s, GA_s, EA])
+
+    def stiffness_matrix_at(self, section_idx: int) -> np.ndarray:
+        """Stiffness matrix K for a specific section (handles variable stiffness)."""
+        E, nu = self._E_nu_at(section_idx)
+        return self._build_K(E, nu)
+
+    @property
+    def stiffness_matrix(self) -> np.ndarray:
+        """Default stiffness matrix K using ``self.young_modulus`` / ``self.poisson_ratio``.
+
+        For variable-stiffness rods, use :meth:`stiffness_matrix_at` instead.
+        """
+        return self._build_K(self.young_modulus, self.poisson_ratio)
 
     @property
     def stiffness_matrix_inv(self) -> np.ndarray:
-        """Inverse of the cross-section stiffness matrix K⁻¹ (compliance matrix)."""
+        """Inverse of the default stiffness matrix K⁻¹ (compliance matrix)."""
         return np.linalg.inv(self.stiffness_matrix)
 
     # ------------------------------------------------------------------ #
@@ -208,14 +240,34 @@ class RodConfig:
             cfg = yaml.safe_load(f)
         rod = cfg.get("rod", {})
 
+        # Variable stiffness
+        ss = rod.get("stiffness_sections", {})
+        node_indices = np.array(ss.get("node_indices", []), dtype=int)
+        young_moduli = np.array(ss.get("young_modulus", []), dtype=float)
+        poisson_ratios = np.array(ss.get("poisson_ratio", []), dtype=float)
+
+        # Default E/ν: use first segment's value if stiffness_sections exists,
+        # otherwise fall back to top-level young_modulus/poisson_ratio.
+        if len(young_moduli) > 0:
+            default_E = float(young_moduli[0])
+        else:
+            default_E = float(rod.get("young_modulus", 8e5))
+        if len(poisson_ratios) > 0:
+            default_nu = float(poisson_ratios[0])
+        else:
+            default_nu = float(rod.get("poisson_ratio", 0.38))
+
         return cls(
             length=float(rod.get("length", 0.16)),
             n_sections=int(rod.get("n_sections", 32)),
-            young_modulus=float(rod.get("young_modulus", 8e5)),
-            poisson_ratio=float(rod.get("poisson_ratio", 0.38)),
+            young_modulus=default_E,
+            poisson_ratio=default_nu,
             beam_radius=float(rod.get("beam_radius", 0.00145)),
             kirchhoff=bool(rod.get("kirchhoff", True)),
             proximal_node_idx=int(rod.get("proximal_node_idx", 0)),
+            stiffness_node_indices=node_indices,
+            stiffness_young_moduli=young_moduli,
+            stiffness_poisson_ratios=poisson_ratios,
         )
 
     @classmethod
