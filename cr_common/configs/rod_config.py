@@ -113,19 +113,20 @@ class RodConfig:
         ``quad_u_u``).  If ``None``, assumes all terms enabled.
 
         Let m = ``n_tendons + n_base_commands`` (control-input dimension).
-        Each enabled term contributes to θ as follows:
+        Each enabled term contributes to θ as follows (n_xi = 9):
 
             bias         : 6
-            linear_xi    : 36
+            linear_xi    : 6 * n_xi = 54
             linear_s     : 18
             linear_u     : 6m
-            quad_xi_xi   : 126   (6 × vech(ξξᵀ) with dim(vech) = 21)
-            cross_xi_s   : 108   (6 × 18)
-            cross_xi_u   : 36m
+            quad_xi_xi   : 6 * n_xi*(n_xi+1)/2 = 270
+            cross_xi_s   : 6 * n_xi*3 = 162
+            cross_xi_u   : 6 * n_xi*m = 54m
             quad_s_s     : 36    (6 × vech(ssᵀ) with dim(vech) = 6)
             cross_s_u    : 18m
             quad_u_u     : 3m(m+1)   (6 × m(m+1)/2)
         """
+        n_xi = 9  # continuous 6D rotation + 3D translation
         m = int(self.n_tendons) + int(self.n_base_commands)
         if terms_enabled is None:
             terms_enabled = {k: True for k in (
@@ -135,12 +136,12 @@ class RodConfig:
             )}
         dims = {
             "bias":       6,
-            "linear_xi":  36,
+            "linear_xi":  6 * n_xi,
             "linear_s":   18,
             "linear_u":   6 * m,
-            "quad_xi_xi": 126,
-            "cross_xi_s": 108,
-            "cross_xi_u": 36 * m,
+            "quad_xi_xi": 6 * (n_xi * (n_xi + 1) // 2),
+            "cross_xi_s": 6 * n_xi * 3,
+            "cross_xi_u": 6 * n_xi * m,
             "quad_s_s":   36,
             "cross_s_u":  18 * m,
             "quad_u_u":   3 * m * (m + 1),
