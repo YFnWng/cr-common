@@ -89,3 +89,32 @@ def R9_jacobian(X: gtsam.Pose3) -> np.ndarray:
     J[6:9, 3:6] = R
 
     return J
+
+
+def R9_to_rotation(r9_row: np.ndarray) -> np.ndarray:
+    """Gram-Schmidt: R9 [R[:,0]; R[:,1]; t] → 3×3 rotation matrix."""
+    e0 = r9_row[:3].copy()
+    e0 /= np.linalg.norm(e0) + 1e-12
+    e1 = r9_row[3:6] - np.dot(r9_row[3:6], e0) * e0
+    e1 /= np.linalg.norm(e1) + 1e-12
+    e2 = np.cross(e0, e1)
+    return np.column_stack([e0, e1, e2])
+
+
+def R9_integrate_step(xi_prev_r9: np.ndarray, delta_se3: np.ndarray) -> np.ndarray:
+    """Integrate one step: X_curr = X_prev * Exp(delta).
+
+    Parameters
+    ----------
+    xi_prev_r9 : (9,) R9 representation [R[:,0]; R[:,1]; t]
+    delta_se3 : (6,) se(3) tangent vector [omega; v]
+
+    Returns
+    -------
+    xi_curr_r9 : (9,) R9 representation of X_curr
+    """
+    R_prev = R9_to_rotation(xi_prev_r9)
+    t_prev = xi_prev_r9[6:9]
+    X_prev = gtsam.Pose3(gtsam.Rot3(R_prev), gtsam.Point3(t_prev))
+    X_curr = X_prev.compose(gtsam.Pose3.Expmap(delta_se3))
+    return SE3_to_R9(X_curr)
