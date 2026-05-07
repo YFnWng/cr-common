@@ -101,6 +101,32 @@ def R9_to_rotation(r9_row: np.ndarray) -> np.ndarray:
     return np.column_stack([e0, e1, e2])
 
 
+def r9_logmap_delta(r9_prev: np.ndarray, r9_curr: np.ndarray) -> np.ndarray:
+    """Compute se(3) Logmap delta between consecutive R9 poses.
+
+    ``Logmap(Pose(r9_prev)^{-1} * Pose(r9_curr))`` for each row.
+
+    Parameters
+    ----------
+    r9_prev, r9_curr : (N, 9) arrays — R9 representation [R[:,0]; R[:,1]; t]
+
+    Returns
+    -------
+    (N, 6) array — se(3) tangent vectors [omega_x, omega_y, omega_z, v_x, v_y, v_z]
+    """
+    N = len(r9_prev)
+    delta = np.zeros((N, 6))
+    for i in range(N):
+        R_p = gtsam.Rot3(R9_to_rotation(r9_prev[i]))
+        t_p = gtsam.Point3(r9_prev[i, 6:9])
+        R_c = gtsam.Rot3(R9_to_rotation(r9_curr[i]))
+        t_c = gtsam.Point3(r9_curr[i, 6:9])
+        P_prev = gtsam.Pose3(R_p, t_p)
+        P_curr = gtsam.Pose3(R_c, t_c)
+        delta[i] = gtsam.Pose3.Logmap(P_prev.between(P_curr))
+    return delta
+
+
 def R9_integrate_step(xi_prev_r9: np.ndarray, delta_se3: np.ndarray) -> np.ndarray:
     """Integrate one step: X_curr = X_prev * Exp(delta).
 
