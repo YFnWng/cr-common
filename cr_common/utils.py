@@ -144,3 +144,25 @@ def R9_integrate_step(xi_prev_r9: np.ndarray, delta_se3: np.ndarray) -> np.ndarr
     X_prev = gtsam.Pose3(gtsam.Rot3(R_prev), gtsam.Point3(t_prev))
     X_curr = X_prev.compose(gtsam.Pose3.Expmap(delta_se3))
     return SE3_to_R9(X_curr)
+
+
+def world_velocity_to_body(pose_quat: np.ndarray,
+                           vel_world: np.ndarray) -> np.ndarray:
+    """Convert world-frame Rigid3d velocity to body-frame se(3) velocity.
+
+    Parameters
+    ----------
+    pose_quat : (7,) pose [x, y, z, qx, qy, qz, qw]
+    vel_world : (6,) world-frame velocity [vx, vy, vz, wx, wy, wz]
+
+    Returns
+    -------
+    xi_dot : (6,) body-frame se(3) velocity [omega_x, omega_y, omega_z, v_x, v_y, v_z]
+    """
+    R = gtsam.Rot3.Quaternion(
+        float(pose_quat[6]), float(pose_quat[3]),
+        float(pose_quat[4]), float(pose_quat[5]),
+    ).matrix()
+    v_body = R.T @ vel_world[:3]
+    omega_body = R.T @ vel_world[3:6]
+    return np.concatenate([omega_body, v_body])
