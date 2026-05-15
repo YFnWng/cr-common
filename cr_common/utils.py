@@ -157,7 +157,7 @@ def world_velocity_to_body(pose_quat: np.ndarray,
 
     Returns
     -------
-    xi_dot : (6,) body-frame se(3) velocity [omega_x, omega_y, omega_z, v_x, v_y, v_z]
+    eta : (6,) body-frame se(3) velocity [omega_x, omega_y, omega_z, v_x, v_y, v_z]
     """
     R = gtsam.Rot3.Quaternion(
         float(pose_quat[6]), float(pose_quat[3]),
