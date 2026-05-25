@@ -46,6 +46,24 @@ def SE3_to_R9(X: gtsam.Pose3) -> np.ndarray:
     return np.concatenate([R[:, 0], R[:, 1], t])
 
 
+def dR9_dxi_right(T: gtsam.Pose3) -> np.ndarray:
+    """Jacobian of SE3_to_R9 w.r.t. right perturbation T → T·Exp(δξ).
+
+    Returns (9, 6) matrix where ξ = [ω; v] ∈ se(3).
+
+    R9 = [R·e₀; R·e₁; t].  Under T → T·Exp(δξ):
+        R → R·exp([ω]×), t → t + R·v
+    """
+    R = T.rotation().matrix()
+    e0 = np.array([1.0, 0.0, 0.0])
+    e1 = np.array([0.0, 1.0, 0.0])
+    dR9 = np.zeros((9, 6))
+    dR9[:3, :3] = -R @ skew(e0)
+    dR9[3:6, :3] = -R @ skew(e1)
+    dR9[6:9, 3:6] = R
+    return dR9
+
+
 def SE3_to_R9_centered(X: gtsam.Pose3) -> np.ndarray:
     """Like SE3_to_R9 but centered so identity maps to zero.
 
