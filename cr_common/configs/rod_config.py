@@ -235,10 +235,13 @@ class RodConfig:
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_yaml(cls, path: str) -> "RodConfig":
-        """Construct from the ``rod`` section of a YAML config file."""
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
+    def from_yaml(cls, path_or_cfg) -> "RodConfig":
+        """Construct from the ``rod`` section of a YAML config (path or dict)."""
+        if isinstance(path_or_cfg, dict):
+            cfg = path_or_cfg
+        else:
+            with open(path_or_cfg) as f:
+                cfg = yaml.safe_load(f)
         rod = cfg.get("rod", {})
 
         # Variable stiffness

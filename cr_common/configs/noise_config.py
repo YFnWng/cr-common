@@ -203,9 +203,12 @@ class NoiseConfig:
 
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_yaml(cls, path: str) -> "NoiseConfig":
-        with open(path) as f:
-            cfg = yaml.safe_load(f)
+    def from_yaml(cls, path_or_cfg) -> "NoiseConfig":
+        if isinstance(path_or_cfg, dict):
+            cfg = path_or_cfg
+        else:
+            with open(path_or_cfg) as f:
+                cfg = yaml.safe_load(f)
         noise = cfg.get("noise", {})
         sensors = cfg.get("sensors", {})
 

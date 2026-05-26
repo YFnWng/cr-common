@@ -23,6 +23,13 @@ def rot3_to_quat(rot: gtsam.Rot3) -> np.ndarray:
     q = rot.toQuaternion()
     return np.array([q.x(), q.y(), q.z(), q.w()])
 
+
+def pose3_to_vec7(X: gtsam.Pose3) -> np.ndarray:
+    """Convert gtsam.Pose3 → [x, y, z, qx, qy, qz, qw]."""
+    t = X.translation()
+    q = rot3_to_quat(X.rotation())
+    return np.concatenate([t, q])
+
 def skew(v: np.ndarray) -> np.ndarray:
     """3×3 skew-symmetric matrix: skew(v) a = v × a."""
     return np.array([[ 0.,    -v[2],  v[1]],
