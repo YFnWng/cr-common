@@ -19,20 +19,30 @@ class SensorReadings:
     """
 
     positions: Dict[int, np.ndarray] = field(default_factory=dict)
-    """node_index → (3,) observed position (mm).  From MRI coils or EM position-only."""
+    """node_index → (3,) observed position.  From MRI coils and EM coils."""
 
-    poses: Dict[int, np.ndarray] = field(default_factory=dict)
-    """node_index → (7,) observed pose [x,y,z,qx,qy,qz,qw].  From EM coils."""
+    orientations: Dict[int, np.ndarray] = field(default_factory=dict)
+    """node_index → (4,) observed orientation [qx,qy,qz,qw].  From EM coils."""
 
     strains: Dict[int, np.ndarray] = field(default_factory=dict)
     """section_index → (3,) observed curvature [u1,u2,u3].  From FBG."""
+
+    @property
+    def poses(self) -> Dict[int, np.ndarray]:
+        """node_index → (7,) pose [x,y,z,qx,qy,qz,qw] for nodes with both
+        position and orientation. Read-only convenience property."""
+        result = {}
+        for k in self.orientations:
+            if k in self.positions:
+                result[k] = np.concatenate([self.positions[k], self.orientations[k]])
+        return result
 
     def merge(self, other: "SensorReadings") -> None:
         """Merge readings from *other* into this object (in-place, no overwrite)."""
         for k, v in other.positions.items():
             self.positions.setdefault(k, v)
-        for k, v in other.poses.items():
-            self.poses.setdefault(k, v)
+        for k, v in other.orientations.items():
+            self.orientations.setdefault(k, v)
         for k, v in other.strains.items():
             self.strains.setdefault(k, v)
 
