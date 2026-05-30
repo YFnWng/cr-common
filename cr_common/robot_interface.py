@@ -1,7 +1,8 @@
 """Unified robot control interface.
 
 Single source of truth for joint definitions, angle encoding/decoding,
-base/tendon command splitting, and sensor configuration.
+base/tendon command splitting, sensor configuration, forward kinematics,
+and base-state geometry (frame reconstruction + Jacobian).
 
 No SOFA or ROS2 dependency — pure config + numpy.  Loaded from the
 robot YAML (``catheter_ablation.yaml``).  Used by preprocessing, models,
@@ -14,6 +15,7 @@ from typing import List, Optional
 
 import numpy as np
 import yaml
+from scipy.spatial.transform import Rotation as _Rotation
 
 
 @dataclass
@@ -56,13 +58,27 @@ class RobotInterface:
 
     def __init__(self, joints: List[JointDef],
                  sensors: dict = None,
-                 insertion_direction: np.ndarray = None):
+                 insertion_direction: np.ndarray = None,
+                 rod_length: float = None,
+                 n_sections: int = None,
+                 home_position: np.ndarray = None,
+                 home_rotation: _Rotation = None):
         self.joints = list(joints)
         self._sensors = sensors or {}
         self.insertion_direction = (
             np.asarray(insertion_direction, dtype=float)
             if insertion_direction is not None
             else np.array([0.0, 0.0, 1.0]))
+
+        # Rod geometry (for FK and base frame reconstruction)
+        self._rod_length = rod_length
+        self._n_sections = n_sections
+        self._ds = rod_length / n_sections if (rod_length and n_sections) else None
+        self._home_position = (
+            np.asarray(home_position, dtype=float)
+            if home_position is not None
+            else np.zeros(3))
+        self._home_rotation = home_rotation or _Rotation.identity()
 
         # Precompute indices
         self._angular_idx = [i for i, j in enumerate(self.joints) if j.is_angular]
@@ -142,8 +158,22 @@ class RobotInterface:
         insertion_dir = act.get("insertion_direction", [0.0, 0.0, 1.0])
         sensors = cfg.get("sensors", {})
 
+        # Rod geometry
+        rod = cfg.get("rod", {})
+        rod_length = float(rod.get("length", 0.16))
+        n_sections = int(rod.get("n_sections", 32))
+        home_pos = np.array(rod.get("base_position", [0, 0, 0]), dtype=float)
+        base_ori = np.array(
+            rod.get("base_orientation_euler_xyz_deg", [0, 0, 0]), dtype=float)
+        prefab_rot = np.array(
+            rod.get("prefab_rotation_euler_xyz_deg", [0, 0, 0]), dtype=float)
+        home_rot = _Rotation.from_euler(
+            "xyz", base_ori + prefab_rot, degrees=True)
+
         return cls(joints, sensors=sensors,
-                   insertion_direction=np.array(insertion_dir))
+                   insertion_direction=np.array(insertion_dir),
+                   rod_length=rod_length, n_sections=n_sections,
+                   home_position=home_pos, home_rotation=home_rot)
 
     # ------------------------------------------------------------------
     # Joint properties
@@ -367,3 +397,217 @@ class RobotInterface:
         from state_estimation.sensors.base import SensorSuite
         # SensorSuite.from_yaml expects a dict with top-level "sensors" key
         return SensorSuite.from_yaml({"sensors": self._sensors}, n_sofa_nodes)
+
+    # ------------------------------------------------------------------
+    # Rod geometry
+    # ------------------------------------------------------------------
+
+    @property
+    def ds(self) -> float:
+        """Section arc length (m)."""
+        return self._ds
+
+    @property
+    def n_sections(self) -> int:
+        return self._n_sections
+
+    @property
+    def n_base(self) -> int:
+        """Number of raw base joints (before encoding)."""
+        return len(self._base_idx)
+
+    @property
+    def base_state_raw_dim(self) -> int:
+        """Raw base state dimension: n_base positions + n_base velocities."""
+        return 2 * len(self._base_idx)
+
+    @property
+    def home_position(self) -> np.ndarray:
+        return self._home_position.copy()
+
+    @property
+    def home_rotation(self) -> _Rotation:
+        return self._home_rotation
+
+    @property
+    def home_pose_7(self) -> np.ndarray:
+        """Home base pose as (7,) = [x, y, z, qx, qy, qz, qw]."""
+        return np.concatenate([
+            self._home_position, self._home_rotation.as_quat()])
+
+    # ------------------------------------------------------------------
+    # Base state std encoding
+    # ------------------------------------------------------------------
+
+    def encode_base_state_std(self, raw_pos_std: np.ndarray) -> np.ndarray:
+        """Map raw base position std → encoded std.
+
+        Angular positions get std=1.0 (cos/sin are bounded).
+        Linear positions keep their raw std.
+
+        Parameters
+        ----------
+        raw_pos_std : (n_base,) per-joint position std in native units
+
+        Returns
+        -------
+        encoded_std : (base_pos_dim,)
+        """
+        parts = []
+        for local_i, global_i in enumerate(self._base_idx):
+            if self.joints[global_i].is_angular:
+                parts.extend([1.0, 1.0])
+            else:
+                parts.append(float(raw_pos_std[local_i]))
+        return np.array(parts, dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    # Forward kinematics
+    # ------------------------------------------------------------------
+
+    def forward_kinematics(self, q, base_pose_7):
+        """Compute all frame poses from strain via Cosserat exponential chain.
+
+        Parameters
+        ----------
+        q : (n_sec, 3) curvature per section
+        base_pose_7 : (7,) base frame [x,y,z,qx,qy,qz,qw]
+
+        Returns
+        -------
+        T_all : list of gtsam.Pose3 — all frames (n_sec+1), from base to tip
+        """
+        import gtsam
+        from state_estimation.utils import pose_from_vec7
+
+        T = pose_from_vec7(base_pose_7)
+        T_all = [T]
+        ds = self._ds
+        for k in range(len(q)):
+            Omega_k = np.array([q[k, 0], q[k, 1], q[k, 2],
+                                0.0, 0.0, 1.0]) * ds
+            T = T.compose(gtsam.Pose3.Expmap(Omega_k))
+            T_all.append(T)
+        return T_all
+
+    def forward_kinematics_with_jacobian(self, q, base_pose_7):
+        """Compute all frame poses, per-frame body Jacobians, and adjoints.
+
+        Uses the recursive body-frame Jacobian propagation:
+            J_body[k+1] = Ad_inv(Exp(Ω_k)) @ (J_body[k] + T_r(Ω_k) @ Π · ds)
+
+        Parameters
+        ----------
+        q : (n_sec, 3)
+        base_pose_7 : (7,)
+
+        Returns
+        -------
+        T_all : list of gtsam.Pose3 — all frames (n_sec+1)
+        J_body_all : list of (6, n_sec*3) arrays — body Jacobian at each frame
+        Ad_inv_all : list of (6, 6) arrays — Ad_inv(T_{base→frame_k}) per frame
+        """
+        import gtsam
+        from state_estimation.utils import pose_from_vec7
+
+        T_k = pose_from_vec7(base_pose_7)
+        n_sec = len(q)
+        ds = self._ds
+        PI = np.vstack([np.eye(3), np.zeros((3, 3))])  # (6, 3)
+
+        J_body = np.zeros((6, n_sec * 3), dtype=np.float64)
+        T_base_to_k = gtsam.Pose3()  # identity
+
+        T_all = [T_k]
+        J_body_all = [J_body.copy()]
+        Ad_inv_all = [np.eye(6, dtype=np.float64)]
+
+        for k in range(n_sec):
+            Omega_k = np.array([q[k, 0], q[k, 1], q[k, 2],
+                                0.0, 0.0, 1.0]) * ds
+            expOmega = gtsam.Pose3.Expmap(Omega_k)
+            T_r = gtsam.Pose3.ExpmapDerivative(Omega_k)  # (6, 6)
+            Ad_inv_exp = expOmega.inverse().AdjointMap()  # (6, 6)
+
+            J_body[:, k * 3:(k + 1) * 3] += T_r @ PI * ds
+            J_body = Ad_inv_exp @ J_body
+
+            T_base_to_k = T_base_to_k.compose(expOmega)
+            T_k = T_k.compose(expOmega)
+
+            T_all.append(T_k)
+            J_body_all.append(J_body.copy())
+            Ad_inv_all.append(T_base_to_k.inverse().AdjointMap())
+
+        return T_all, J_body_all, Ad_inv_all
+
+    def forward_kinematics_batch(self, q_batch, base_frame_batch, X_ref=None):
+        """Batch FK: strain → R9 tip pose (convenience for visualization).
+
+        Parameters
+        ----------
+        q_batch : (N, n_sec, 3)
+        base_frame_batch : (N, 7)
+        X_ref : gtsam.Pose3 or None
+            If None, tip poses are expressed in world frame.
+
+        Returns
+        -------
+        xi_batch : (N, 9)
+        """
+        import gtsam
+        from state_estimation.utils import SE3_to_R9
+
+        if X_ref is None:
+            X_ref = gtsam.Pose3.Identity()
+        N = q_batch.shape[0]
+        xi_batch = np.zeros((N, 9), dtype=np.float32)
+        for i in range(N):
+            T_all = self.forward_kinematics(q_batch[i], base_frame_batch[i])
+            xi_batch[i] = SE3_to_R9(X_ref.between(T_all[-1]))
+        return xi_batch
+
+    # ------------------------------------------------------------------
+    # Base frame geometry
+    # ------------------------------------------------------------------
+
+    def base_frame_from_encoded_state(self, encoded_base_pos: np.ndarray
+                                      ) -> np.ndarray:
+        """Reconstruct base frame (7,) from encoded base position.
+
+        Parameters
+        ----------
+        encoded_base_pos : (base_pos_dim,) e.g. [ins, cos(rot), sin(rot)]
+
+        Returns
+        -------
+        pose_7 : (7,) = [x, y, z, qx, qy, qz, qw]
+        """
+        ins = float(encoded_base_pos[0])
+        rot_rad = float(np.arctan2(encoded_base_pos[2], encoded_base_pos[1]))
+
+        world_dir = self._home_rotation.apply(self.insertion_direction)
+        world_dir = world_dir / np.linalg.norm(world_dir)
+
+        target_pos = self._home_position + world_dir * ins
+        rotation = _Rotation.from_rotvec(rot_rad * world_dir)
+        target_quat = (rotation * self._home_rotation).as_quat()
+        return np.concatenate([target_pos, target_quat])
+
+    def base_state_jacobian(self, encoded_base_pos: np.ndarray) -> np.ndarray:
+        """Compute d(ξ_body)/d(encoded_base_pos): (6, base_pos_dim) matrix.
+
+        Maps perturbations in encoded base position [ins, cos(rot), sin(rot)]
+        to body-frame twist ξ = [ω, v] (GTSAM convention: [ω(3), v(3)]).
+
+        Right perturbation: T' = T * Exp(ξ).
+        """
+        cos_rot = float(encoded_base_pos[1])
+        sin_rot = float(encoded_base_pos[2])
+        d_body = self.insertion_direction.astype(np.float64)
+
+        J = np.zeros((6, self._base_pos_dim), dtype=np.float64)
+        J[3:6, 0] = d_body                  # d(v)/d(ins)
+        J[0:3, 1] = d_body * (-sin_rot)     # d(ω)/d(cos_rot)
+        J[0:3, 2] = d_body * cos_rot        # d(ω)/d(sin_rot)
+        return J
