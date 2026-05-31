@@ -137,4 +137,36 @@ class SensorSuite:
             ))
 
         n_position_sensors = len(em_indices) + len(mri_indices)
-        return cls(sensors, n_position_sensors=n_position_sensors)
+        suite = cls(sensors, n_position_sensors=n_position_sensors)
+        suite._mri_frames = list(mri_indices)
+        suite._em_frames = list(em_indices)
+        suite._fbg_sections = list(fbg_sections)
+        return suite
+
+    @property
+    def mri_frames(self) -> list:
+        """Frame indices for MRI coil sensors (position-only)."""
+        return getattr(self, '_mri_frames', [])
+
+    @property
+    def em_frames(self) -> list:
+        """Frame indices for EM coil sensors (6-DOF pose)."""
+        return getattr(self, '_em_frames', [])
+
+    @property
+    def fbg_sections(self) -> list:
+        """Section indices for FBG strain sensors."""
+        return getattr(self, '_fbg_sections', [])
+
+    @property
+    def has_sensors(self) -> bool:
+        return bool(self.mri_frames or self.em_frames or self.fbg_sections)
+
+    @property
+    def residual_dim(self) -> int:
+        """Dimension of the Kalman filter innovation vector."""
+        if not self.has_sensors:
+            return 15  # legacy: R9(9) + eta(6)
+        return (3 * len(self.mri_frames) +
+                6 * len(self.em_frames) +
+                3 * len(self.fbg_sections))
