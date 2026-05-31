@@ -611,3 +611,171 @@ class RobotInterface:
         J[0:3, 1] = d_body * (-sin_rot)     # d(ω)/d(cos_rot)
         J[0:3, 2] = d_body * cos_rot        # d(ω)/d(sin_rot)
         return J
+
+    # ------------------------------------------------------------------
+    # Torch methods (GPU-compatible, batched)
+    # ------------------------------------------------------------------
+
+    def encode_command_torch(self, raw_cmd: 'torch.Tensor') -> 'torch.Tensor':
+        """Encode raw commands on GPU: angular joints (deg) → (cos, sin).
+
+        Parameters
+        ----------
+        raw_cmd : (K, n_joints) or (n_joints,) tensor
+
+        Returns
+        -------
+        encoded : (K, encoded_cmd_dim) or (encoded_cmd_dim,) tensor
+        """
+        import torch
+        single = raw_cmd.dim() == 1
+        if single:
+            raw_cmd = raw_cmd.unsqueeze(0)
+
+        parts = []
+        for i, j in enumerate(self.joints):
+            if j.is_angular:
+                rad = raw_cmd[:, i:i + 1] * (3.141592653589793 / 180.0)
+                parts.append(torch.cos(rad))
+                parts.append(torch.sin(rad))
+            else:
+                parts.append(raw_cmd[:, i:i + 1])
+        result = torch.cat(parts, dim=-1)
+        return result.squeeze(0) if single else result
+
+    def forward_kinematics_torch(self, z_batch: 'torch.Tensor',
+                                 base_pos_batch: 'torch.Tensor',
+                                 encoder,
+                                 frame_idx: int = -1,
+                                 mode: str = "position") -> 'torch.Tensor':
+        """Batched differentiable FK: latent state → frame position/pose.
+
+        Parameters
+        ----------
+        z_batch : (K, d) latent coordinates
+        base_pos_batch : (K, base_pos_dim) encoded base position
+        encoder : PCA encoder with ._components (d, n_strain) and ._mean
+        frame_idx : which frame to return (-1 = last = tip)
+        mode : "position" → (K, 3), "pose" → (K, 7) [pos + quat]
+
+        Returns
+        -------
+        result : (K, 3) or (K, 7) depending on mode
+        """
+        import torch
+        from state_estimation.utils import se3_exp_torch
+
+        device = z_batch.device
+        K = z_batch.shape[0]
+        n_sec = self._n_sections
+
+        if frame_idx < 0:
+            frame_idx = n_sec + 1 + frame_idx  # -1 → n_sec (tip)
+        target_sec = min(frame_idx, n_sec)
+
+        # PCA decode: z → strain
+        W = torch.tensor(encoder._components, dtype=torch.float32,
+                         device=device)  # (d, n_strain)
+        mean = torch.tensor(encoder._mean, dtype=torch.float32,
+                            device=device)  # (n_strain,)
+        q_flat = z_batch @ W + mean  # (K, n_strain)
+        q = q_flat.reshape(K, n_sec, 3)  # (K, n_sec, 3)
+
+        # Reconstruct base frame from encoded state
+        T = self._base_frame_from_encoded_torch(base_pos_batch)  # (K, 4, 4)
+
+        # Precompute ALL section exponentials in one batched call
+        ds = self._ds
+        q_sec = q[:, :target_sec, :]  # (K, target_sec, 3)
+        omega_all = q_sec * ds  # (K, target_sec, 3)
+        v_all = torch.zeros(K, target_sec, 3, device=device, dtype=torch.float32)
+        v_all[:, :, 2] = ds  # unit tangent along rod axis
+        xi_all = torch.cat([omega_all, v_all], dim=-1)  # (K, target_sec, 6)
+        dT_all = se3_exp_torch(xi_all)  # (K, target_sec, 4, 4)
+
+        # Sequential chain multiplication (only part that can't be parallelized)
+        for k in range(target_sec):
+            T = torch.matmul(T, dT_all[:, k])
+
+        if mode == "position":
+            return T[:, :3, 3]
+        else:
+            # Extract position + quaternion
+            pos = T[:, :3, 3]
+            R = T[:, :3, :3]
+            quat = self._rotation_matrix_to_quat_torch(R)
+            return torch.cat([pos, quat], dim=-1)
+
+    def _base_frame_from_encoded_torch(self, encoded_base_pos: 'torch.Tensor'
+                                       ) -> 'torch.Tensor':
+        """Batched base frame reconstruction from encoded state.
+
+        Parameters
+        ----------
+        encoded_base_pos : (K, base_pos_dim) e.g. (K, 3) = [ins, cos, sin]
+
+        Returns
+        -------
+        T : (K, 4, 4) homogeneous transforms
+        """
+        import torch
+
+        device = encoded_base_pos.device
+        K = encoded_base_pos.shape[0]
+
+        ins = encoded_base_pos[:, 0]          # (K,)
+        cos_rot = encoded_base_pos[:, 1]      # (K,)
+        sin_rot = encoded_base_pos[:, 2]      # (K,)
+        rot_rad = torch.atan2(sin_rot, cos_rot)
+
+        # Home rotation as matrix
+        home_R = torch.tensor(
+            self._home_rotation.as_matrix(), dtype=torch.float32,
+            device=device)  # (3, 3)
+        home_pos = torch.tensor(
+            self._home_position, dtype=torch.float32, device=device)  # (3,)
+        ins_dir = torch.tensor(
+            self.insertion_direction, dtype=torch.float32, device=device)  # (3,)
+
+        # World insertion direction
+        world_dir = home_R @ ins_dir  # (3,)
+        world_dir = world_dir / world_dir.norm()
+
+        # Position: home + ins * world_dir
+        pos = home_pos.unsqueeze(0) + ins.unsqueeze(-1) * world_dir.unsqueeze(0)
+
+        # Rotation: Rodrigues for axial rotation about world_dir
+        # R_axial = I + sin(θ) [n]× + (1-cos(θ)) [n]×²
+        from state_estimation.utils import skew_torch
+        n_hat = skew_torch(world_dir.unsqueeze(0).expand(K, -1))  # (K, 3, 3)
+        n_hat_sq = torch.matmul(n_hat, n_hat)
+        I = torch.eye(3, device=device, dtype=torch.float32).unsqueeze(0)
+        R_axial = (I + sin_rot[:, None, None] * n_hat
+                   + (1 - cos_rot[:, None, None]) * n_hat_sq)
+        # Full rotation: R_axial @ home_R
+        R = torch.matmul(R_axial, home_R.unsqueeze(0).expand(K, -1, -1))
+
+        # Assemble 4x4
+        T = torch.zeros(K, 4, 4, device=device, dtype=torch.float32)
+        T[:, :3, :3] = R
+        T[:, :3, 3] = pos
+        T[:, 3, 3] = 1.0
+        return T
+
+    @staticmethod
+    def _rotation_matrix_to_quat_torch(R: 'torch.Tensor') -> 'torch.Tensor':
+        """Convert (K, 3, 3) rotation matrices to (K, 4) quaternions [qx,qy,qz,qw]."""
+        import torch
+        # Shepperd's method (numerically stable)
+        K = R.shape[0]
+        trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+
+        quat = torch.zeros(K, 4, device=R.device, dtype=R.dtype)
+
+        # Case: trace > 0
+        s = torch.sqrt(torch.clamp(trace + 1.0, min=1e-10)) * 2  # 4*qw
+        quat[:, 3] = 0.25 * s  # qw
+        quat[:, 0] = (R[:, 2, 1] - R[:, 1, 2]) / s  # qx
+        quat[:, 1] = (R[:, 0, 2] - R[:, 2, 0]) / s  # qy
+        quat[:, 2] = (R[:, 1, 0] - R[:, 0, 1]) / s  # qz
+        return quat

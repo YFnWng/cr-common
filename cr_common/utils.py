@@ -191,3 +191,113 @@ def world_velocity_to_body(pose_quat: np.ndarray,
     v_body = R.T @ vel_world[:3]
     omega_body = R.T @ vel_world[3:6]
     return np.concatenate([omega_body, v_body])
+
+
+# ---------------------------------------------------------------------------
+# Torch SE(3) utilities — batched, differentiable, GPU-compatible
+# Convention: xi = [omega(3), v(3)] matching GTSAM (rotation first)
+# Ported from github.com/YFnWng/continuumSim/SE3.py with singularity handling
+# ---------------------------------------------------------------------------
+
+import torch
+
+
+def skew_torch(v: torch.Tensor) -> torch.Tensor:
+    """Batched skew-symmetric matrix.
+
+    Parameters
+    ----------
+    v : (..., 3)
+
+    Returns
+    -------
+    S : (..., 3, 3)
+    """
+    S = torch.zeros(*v.shape, 3, device=v.device, dtype=v.dtype)
+    S[..., 0, 1] = -v[..., 2]
+    S[..., 0, 2] = v[..., 1]
+    S[..., 1, 2] = -v[..., 0]
+    S[..., 1, 0] = v[..., 2]
+    S[..., 2, 0] = -v[..., 1]
+    S[..., 2, 1] = v[..., 0]
+    return S
+
+
+def se3_exp_torch(xi: torch.Tensor) -> torch.Tensor:
+    """Batched exponential map se(3) → SE(3).
+
+    Uses Rodrigues' formula with robust handling at theta → 0.
+
+    Parameters
+    ----------
+    xi : (..., 6) = [omega(3), v(3)]
+        Lie algebra element. omega = rotation, v = translation.
+
+    Returns
+    -------
+    T : (..., 4, 4) homogeneous transformation matrix
+    """
+    omega = xi[..., :3]  # (..., 3) rotation
+    v = xi[..., 3:]      # (..., 3) translation
+
+    theta = omega.norm(dim=-1, keepdim=True)  # (..., 1)
+    theta_sq = theta ** 2
+    theta_cu = theta_sq * theta
+
+    # Robust coefficients with Taylor expansion at theta ≈ 0
+    # sin(θ)/θ → 1 - θ²/6
+    # (1 - cos(θ))/θ² → 1/2 - θ²/24
+    # (θ - sin(θ))/θ³ → 1/6 - θ²/120
+    small = (theta < 1e-7).squeeze(-1)
+
+    safe_theta = torch.where(theta < 1e-7, torch.ones_like(theta), theta)
+    safe_theta_sq = safe_theta ** 2
+    safe_theta_cu = safe_theta_sq * safe_theta
+
+    alpha = torch.sin(theta) / safe_theta
+    beta = (1.0 - torch.cos(theta)) / safe_theta_sq
+    gamma = (theta - torch.sin(theta)) / safe_theta_cu
+
+    # Taylor limits for small theta
+    alpha = torch.where(theta < 1e-7, 1.0 - theta_sq / 6.0, alpha)
+    beta = torch.where(theta < 1e-7, 0.5 - theta_sq / 24.0, beta)
+    gamma = torch.where(theta < 1e-7, 1.0 / 6.0 - theta_sq / 120.0, gamma)
+
+    # Skew-symmetric matrix of omega: (..., 3, 3)
+    omega_hat = skew_torch(omega)
+    omega_hat_sq = torch.matmul(omega_hat, omega_hat)
+
+    # Rotation: R = I + alpha * [ω]× + beta * [ω]×²
+    I = torch.eye(3, device=xi.device, dtype=xi.dtype).expand(
+        *omega.shape[:-1], 3, 3)
+    R = (I + alpha[..., None] * omega_hat
+         + beta[..., None] * omega_hat_sq)
+
+    # Translation: t = V @ v, where V = I + beta * [ω]× + gamma * [ω]×²
+    V = (I + beta[..., None] * omega_hat
+         + gamma[..., None] * omega_hat_sq)
+    t = torch.matmul(V, v.unsqueeze(-1)).squeeze(-1)  # (..., 3)
+
+    # Assemble 4x4 homogeneous transform
+    T = torch.zeros(*xi.shape[:-1], 4, 4, device=xi.device, dtype=xi.dtype)
+    T[..., :3, :3] = R
+    T[..., :3, 3] = t
+    T[..., 3, 3] = 1.0
+    return T
+
+
+def se3_hat_torch(xi: torch.Tensor) -> torch.Tensor:
+    """Batched hat map: se(3) vector → 4×4 matrix representation.
+
+    Parameters
+    ----------
+    xi : (..., 6) = [omega(3), v(3)]
+
+    Returns
+    -------
+    Xi : (..., 4, 4)
+    """
+    Xi = torch.zeros(*xi.shape[:-1], 4, 4, device=xi.device, dtype=xi.dtype)
+    Xi[..., :3, :3] = skew_torch(xi[..., :3])
+    Xi[..., :3, 3] = xi[..., 3:]
+    return Xi
