@@ -165,10 +165,9 @@ class RobotInterface:
         home_pos = np.array(rod.get("base_position", [0, 0, 0]), dtype=float)
         base_ori = np.array(
             rod.get("base_orientation_euler_xyz_deg", [0, 0, 0]), dtype=float)
-        prefab_rot = np.array(
-            rod.get("prefab_rotation_euler_xyz_deg", [0, 0, 0]), dtype=float)
-        home_rot = _Rotation.from_euler(
-            "xyz", base_ori + prefab_rot, degrees=True)
+        # Physical base orientation only — prefab rotation is SOFA-specific
+        # and handled on the simulation side
+        home_rot = _Rotation.from_euler("xyz", base_ori, degrees=True)
 
         return cls(joints, sensors=sensors,
                    insertion_direction=np.array(insertion_dir),
@@ -689,7 +688,7 @@ class RobotInterface:
         q_sec = q[:, :target_sec, :]  # (K, target_sec, 3)
         omega_all = q_sec * ds  # (K, target_sec, 3)
         v_all = torch.zeros(K, target_sec, 3, device=device, dtype=torch.float32)
-        v_all[:, :, 2] = ds  # unit tangent along rod axis
+        v_all[:, :, 2] = ds  # unit tangent along rod local Z axis
         xi_all = torch.cat([omega_all, v_all], dim=-1)  # (K, target_sec, 6)
         dT_all = se3_exp_torch(xi_all)  # (K, target_sec, 4, 4)
 
