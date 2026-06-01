@@ -464,6 +464,7 @@ class RobotInterface:
     # Forward kinematics
     # ------------------------------------------------------------------
 
+    # TODO: clean up non-torch FK.
     def forward_kinematics(self, q, base_pose_7):
         """Compute all frame poses from strain via Cosserat exponential chain.
 
@@ -644,22 +645,18 @@ class RobotInterface:
 
     def forward_kinematics_torch(self, z_batch: 'torch.Tensor',
                                  base_pos_batch: 'torch.Tensor',
-                                 encoder,
-                                 frame_idx: int = -1,
-                                 mode: str = "position") -> 'torch.Tensor':
-        """Batched differentiable FK: latent state → frame position/pose.
+                                 encoder) -> 'torch.Tensor':
+        """Batched differentiable FK: latent state → all frame transforms.
 
         Parameters
         ----------
         z_batch : (K, d) latent coordinates
         base_pos_batch : (K, base_pos_dim) encoded base position
         encoder : PCA encoder with ._components (d, n_strain) and ._mean
-        frame_idx : which frame to return (-1 = last = tip)
-        mode : "position" → (K, 3), "pose" → (K, 7) [pos + quat]
 
         Returns
         -------
-        result : (K, 3) or (K, 7) depending on mode
+        T_all : (K, n_sec+1, 4, 4) homogeneous transforms for all frames
         """
         import torch
         from state_estimation.utils import se3_exp_torch
@@ -667,10 +664,6 @@ class RobotInterface:
         device = z_batch.device
         K = z_batch.shape[0]
         n_sec = self._n_sections
-
-        if frame_idx < 0:
-            frame_idx = n_sec + 1 + frame_idx  # -1 → n_sec (tip)
-        target_sec = min(frame_idx, n_sec)
 
         # PCA decode: z → strain
         W = torch.tensor(encoder._components, dtype=torch.float32,
@@ -685,25 +678,21 @@ class RobotInterface:
 
         # Precompute ALL section exponentials in one batched call
         ds = self._ds
-        q_sec = q[:, :target_sec, :]  # (K, target_sec, 3)
-        omega_all = q_sec * ds  # (K, target_sec, 3)
-        v_all = torch.zeros(K, target_sec, 3, device=device, dtype=torch.float32)
+        omega_all = q * ds  # (K, n_sec, 3)
+        v_all = torch.zeros(K, n_sec, 3, device=device, dtype=torch.float32)
         v_all[:, :, 2] = ds  # unit tangent along rod local Z axis
-        xi_all = torch.cat([omega_all, v_all], dim=-1)  # (K, target_sec, 6)
-        dT_all = se3_exp_torch(xi_all)  # (K, target_sec, 4, 4)
+        xi_all = torch.cat([omega_all, v_all], dim=-1)  # (K, n_sec, 6)
+        dT_all = se3_exp_torch(xi_all)  # (K, n_sec, 4, 4)
 
-        # Sequential chain multiplication (only part that can't be parallelized)
-        for k in range(target_sec):
+        # Sequential chain multiplication, storing all frames
+        T_all = torch.empty(K, n_sec + 1, 4, 4, device=device,
+                            dtype=torch.float32)
+        T_all[:, 0] = T
+        for k in range(n_sec):
             T = torch.matmul(T, dT_all[:, k])
+            T_all[:, k + 1] = T
 
-        if mode == "position":
-            return T[:, :3, 3]
-        else:
-            # Extract position + quaternion
-            pos = T[:, :3, 3]
-            R = T[:, :3, :3]
-            quat = self._rotation_matrix_to_quat_torch(R)
-            return torch.cat([pos, quat], dim=-1)
+        return T_all
 
     def _base_frame_from_encoded_torch(self, encoded_base_pos: 'torch.Tensor'
                                        ) -> 'torch.Tensor':
