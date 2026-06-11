@@ -62,9 +62,11 @@ class RobotInterface:
                  rod_length: float = None,
                  n_sections: int = None,
                  home_position: np.ndarray = None,
-                 home_rotation: _Rotation = None):
+                 home_rotation: _Rotation = None,
+                 encode_angles: bool = True):
         self.joints = list(joints)
         self._sensors = sensors or {}
+        self._encode_angles = encode_angles
         self.insertion_direction = (
             np.asarray(insertion_direction, dtype=float)
             if insertion_direction is not None
@@ -85,20 +87,24 @@ class RobotInterface:
         self._tendon_idx = [i for i, j in enumerate(self.joints) if j.is_tendon]
         self._base_idx = [i for i, j in enumerate(self.joints) if not j.is_tendon]
 
-        # Encoded dimensions: each angular joint expands 1 → 2
+        # Encoded dimensions: angular joints expand 1 → 2 only if encode_angles
         self._encoded_base_dim = sum(
-            2 if j.is_angular else 1 for j in self.joints if not j.is_tendon)
+            (2 if (j.is_angular and encode_angles) else 1)
+            for j in self.joints if not j.is_tendon)
         self._tendon_dim = len(self._tendon_idx)
         self._encoded_cmd_dim = self._encoded_base_dim + self._tendon_dim
 
         # Base state: angular positions expand 1 → 2, velocities stay as-is
         n_base = len(self._base_idx)
-        n_angular_base = sum(1 for i in self._base_idx if self.joints[i].is_angular)
-        self._base_pos_dim = n_base + n_angular_base  # each angular adds 1 extra
+        n_angular_base = sum(
+            1 for i in self._base_idx
+            if self.joints[i].is_angular and encode_angles)
+        self._base_pos_dim = n_base + n_angular_base
         self._base_vel_dim = n_base
 
     @classmethod
-    def from_yaml(cls, yaml_path: str) -> "RobotInterface":
+    def from_yaml(cls, yaml_path: str,
+                  encode_angles: bool = True) -> "RobotInterface":
         """Load from a robot YAML config file.
 
         Reads the ``actuation`` and ``sensors`` sections.
@@ -172,7 +178,8 @@ class RobotInterface:
         return cls(joints, sensors=sensors,
                    insertion_direction=np.array(insertion_dir),
                    rod_length=rod_length, n_sections=n_sections,
-                   home_position=home_pos, home_rotation=home_rot)
+                   home_position=home_pos, home_rotation=home_rot,
+                   encode_angles=encode_angles)
 
     # ------------------------------------------------------------------
     # Joint properties
@@ -224,7 +231,7 @@ class RobotInterface:
     # ------------------------------------------------------------------
 
     def encode_command(self, raw_cmd: np.ndarray) -> np.ndarray:
-        """Encode raw joint commands: angular joints (deg) → (cos, sin).
+        """Encode raw joint commands: angular joints (deg) → (cos, sin) or rad.
 
         Parameters
         ----------
@@ -240,17 +247,19 @@ class RobotInterface:
 
         parts = []
         for i, j in enumerate(self.joints):
-            if j.is_angular:
+            if j.is_angular and self._encode_angles:
                 rad = np.deg2rad(raw_cmd[:, i:i + 1])
                 parts.append(np.cos(rad))
                 parts.append(np.sin(rad))
+            elif j.is_angular:
+                parts.append(np.deg2rad(raw_cmd[:, i:i + 1]))
             else:
                 parts.append(raw_cmd[:, i:i + 1])
         result = np.concatenate(parts, axis=-1)
         return result[0] if single else result
 
     def decode_command(self, encoded_cmd: np.ndarray) -> np.ndarray:
-        """Decode encoded commands: (cos, sin) → angular joints (deg).
+        """Decode encoded commands: (cos, sin) or rad → angular joints (deg).
 
         Parameters
         ----------
@@ -268,11 +277,14 @@ class RobotInterface:
                           dtype=np.float64)
         enc_idx = 0
         for i, j in enumerate(self.joints):
-            if j.is_angular:
+            if j.is_angular and self._encode_angles:
                 result[..., i] = np.degrees(
                     np.arctan2(encoded_cmd[..., enc_idx + 1],
                                encoded_cmd[..., enc_idx]))
                 enc_idx += 2
+            elif j.is_angular:
+                result[..., i] = np.degrees(encoded_cmd[..., enc_idx])
+                enc_idx += 1
             else:
                 result[..., i] = encoded_cmd[..., enc_idx]
                 enc_idx += 1
@@ -323,6 +335,7 @@ class RobotInterface:
         Returns
         -------
         encoded : (..., base_state_dim) with angular positions as (cos, sin)
+                  or raw radians if encode_angles=False
         """
         n_base = len(self._base_idx)
         pos_raw = raw_state[..., :n_base]
@@ -330,8 +343,7 @@ class RobotInterface:
 
         pos_parts = []
         for local_i, global_i in enumerate(self._base_idx):
-            if self.joints[global_i].is_angular:
-                # Angular position: value is in radians
+            if self.joints[global_i].is_angular and self._encode_angles:
                 pos_parts.append(np.cos(pos_raw[..., local_i:local_i + 1]))
                 pos_parts.append(np.sin(pos_raw[..., local_i:local_i + 1]))
             else:
@@ -358,7 +370,7 @@ class RobotInterface:
         pos_parts = []
         enc_idx = 0
         for local_i, global_i in enumerate(self._base_idx):
-            if self.joints[global_i].is_angular:
+            if self.joints[global_i].is_angular and self._encode_angles:
                 angle = np.arctan2(pos_enc[..., enc_idx + 1],
                                    pos_enc[..., enc_idx])
                 pos_parts.append(angle[..., np.newaxis] if angle.ndim > 0
@@ -441,8 +453,8 @@ class RobotInterface:
     def encode_base_state_std(self, raw_pos_std: np.ndarray) -> np.ndarray:
         """Map raw base position std → encoded std.
 
-        Angular positions get std=1.0 (cos/sin are bounded).
-        Linear positions keep their raw std.
+        Angular positions get std=1.0 (cos/sin are bounded) when
+        encode_angles=True, otherwise keep their raw std.
 
         Parameters
         ----------
@@ -454,7 +466,7 @@ class RobotInterface:
         """
         parts = []
         for local_i, global_i in enumerate(self._base_idx):
-            if self.joints[global_i].is_angular:
+            if self.joints[global_i].is_angular and self._encode_angles:
                 parts.extend([1.0, 1.0])
             else:
                 parts.append(float(raw_pos_std[local_i]))
@@ -598,18 +610,20 @@ class RobotInterface:
         """Compute d(ξ_body)/d(encoded_base_pos): (6, base_pos_dim) matrix.
 
         Maps perturbations in encoded base position [ins, cos(rot), sin(rot)]
-        to body-frame twist ξ = [ω, v] (GTSAM convention: [ω(3), v(3)]).
+        or [ins, rot_rad] to body-frame twist ξ = [ω, v] (GTSAM convention).
 
         Right perturbation: T' = T * Exp(ξ).
         """
-        cos_rot = float(encoded_base_pos[1])
-        sin_rot = float(encoded_base_pos[2])
         d_body = self.insertion_direction.astype(np.float64)
-
         J = np.zeros((6, self._base_pos_dim), dtype=np.float64)
         J[3:6, 0] = d_body                  # d(v)/d(ins)
-        J[0:3, 1] = d_body * (-sin_rot)     # d(ω)/d(cos_rot)
-        J[0:3, 2] = d_body * cos_rot        # d(ω)/d(sin_rot)
+        if self._encode_angles:
+            cos_rot = float(encoded_base_pos[1])
+            sin_rot = float(encoded_base_pos[2])
+            J[0:3, 1] = d_body * (-sin_rot)     # d(ω)/d(cos_rot)
+            J[0:3, 2] = d_body * cos_rot        # d(ω)/d(sin_rot)
+        else:
+            J[0:3, 1] = d_body                   # d(ω)/d(rot_rad)
         return J
 
     # ------------------------------------------------------------------
@@ -617,7 +631,7 @@ class RobotInterface:
     # ------------------------------------------------------------------
 
     def encode_command_torch(self, raw_cmd: 'torch.Tensor') -> 'torch.Tensor':
-        """Encode raw commands on GPU: angular joints (deg) → (cos, sin).
+        """Encode raw commands on GPU: angular joints (deg) → (cos, sin) or rad.
 
         Parameters
         ----------
@@ -634,10 +648,12 @@ class RobotInterface:
 
         parts = []
         for i, j in enumerate(self.joints):
-            if j.is_angular:
+            if j.is_angular and self._encode_angles:
                 rad = raw_cmd[:, i:i + 1] * (3.141592653589793 / 180.0)
                 parts.append(torch.cos(rad))
                 parts.append(torch.sin(rad))
+            elif j.is_angular:
+                parts.append(raw_cmd[:, i:i + 1] * (3.141592653589793 / 180.0))
             else:
                 parts.append(raw_cmd[:, i:i + 1])
         result = torch.cat(parts, dim=-1)
@@ -712,9 +728,14 @@ class RobotInterface:
         K = encoded_base_pos.shape[0]
 
         ins = encoded_base_pos[:, 0]          # (K,)
-        cos_rot = encoded_base_pos[:, 1]      # (K,)
-        sin_rot = encoded_base_pos[:, 2]      # (K,)
-        rot_rad = torch.atan2(sin_rot, cos_rot)
+        if self._encode_angles:
+            cos_rot = encoded_base_pos[:, 1]      # (K,)
+            sin_rot = encoded_base_pos[:, 2]      # (K,)
+            rot_rad = torch.atan2(sin_rot, cos_rot)
+        else:
+            rot_rad = encoded_base_pos[:, 1]      # (K,)
+            cos_rot = torch.cos(rot_rad)
+            sin_rot = torch.sin(rot_rad)
 
         # Home rotation as matrix
         home_R = torch.tensor(
