@@ -1,0 +1,6 @@
+[project]
+name = "cr-common"
+version = "0.1.0"
+dependencies = ["numpy", "torch", "pyyaml"]
+[tool.setuptools.packages.find]
+include = ["cr_common*"]

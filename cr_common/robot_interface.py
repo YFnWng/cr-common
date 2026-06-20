@@ -405,7 +405,7 @@ class RobotInterface:
 
     def build_sensor_suite(self, n_sofa_nodes: int):
         """Build a SensorSuite from the sensor config."""
-        from state_estimation.sensors.base import SensorSuite
+        from cr_common.sensors.base import SensorSuite
         # SensorSuite.from_yaml expects a dict with top-level "sensors" key
         return SensorSuite.from_yaml({"sensors": self._sensors}, n_sofa_nodes)
 
@@ -490,7 +490,7 @@ class RobotInterface:
         T_all : list of gtsam.Pose3 — all frames (n_sec+1), from base to tip
         """
         import gtsam
-        from state_estimation.utils import pose_from_vec7
+        from cr_common.utils import pose_from_vec7
 
         T = pose_from_vec7(base_pose_7)
         T_all = [T]
@@ -520,7 +520,7 @@ class RobotInterface:
         Ad_inv_all : list of (6, 6) arrays — Ad_inv(T_{base→frame_k}) per frame
         """
         import gtsam
-        from state_estimation.utils import pose_from_vec7
+        from cr_common.utils import pose_from_vec7
 
         T_k = pose_from_vec7(base_pose_7)
         n_sec = len(q)
@@ -568,7 +568,7 @@ class RobotInterface:
         xi_batch : (N, 9)
         """
         import gtsam
-        from state_estimation.utils import SE3_to_R9
+        from cr_common.utils import SE3_to_R9
 
         if X_ref is None:
             X_ref = gtsam.Pose3.Identity()
@@ -675,7 +675,7 @@ class RobotInterface:
         T_all : (K, n_sec+1, 4, 4) homogeneous transforms for all frames
         """
         import torch
-        from state_estimation.utils import se3_exp_torch
+        from cr_common.utils import se3_exp_torch
 
         device = z_batch.device
         K = z_batch.shape[0]
@@ -755,7 +755,7 @@ class RobotInterface:
 
         # Rotation: Rodrigues for axial rotation about world_dir
         # R_axial = I + sin(θ) [n]× + (1-cos(θ)) [n]×²
-        from state_estimation.utils import skew_torch
+        from cr_common.utils import skew_torch
         n_hat = skew_torch(world_dir.unsqueeze(0).expand(K, -1))  # (K, 3, 3)
         n_hat_sq = torch.matmul(n_hat, n_hat)
         I = torch.eye(3, device=device, dtype=torch.float32).unsqueeze(0)
