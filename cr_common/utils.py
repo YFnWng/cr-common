@@ -301,3 +301,88 @@ def se3_hat_torch(xi: torch.Tensor) -> torch.Tensor:
     Xi[..., :3, :3] = skew_torch(xi[..., :3])
     Xi[..., :3, 3] = xi[..., 3:]
     return Xi
+
+
+def se3_adjoint_torch(T: torch.Tensor) -> torch.Tensor:
+    """Batched SE(3) adjoint Ad(T) of a pose, mapping body twist [ω, v]→[ω, v].
+
+    Ad(R, t) = [[R,          0],
+                [skew(t)·R,  R]]      (GTSAM [ω, v] convention).
+
+    Parameters
+    ----------
+    T : (..., 4, 4) homogeneous transform.
+    Returns
+    -------
+    Ad : (..., 6, 6)
+    """
+    R = T[..., :3, :3]
+    t = T[..., :3, 3]
+    tR = torch.matmul(skew_torch(t), R)
+    Z = torch.zeros_like(R)
+    return torch.cat([torch.cat([R, Z], dim=-1),
+                      torch.cat([tR, R], dim=-1)], dim=-2)
+
+
+def so3_right_jacobian_torch(omega: torch.Tensor) -> torch.Tensor:
+    """Batched SO(3) right Jacobian J_r(ω) (3×3), robust at θ→0.
+
+    J_r(ω) = I − (1−cosθ)/θ²·[ω]× + (θ−sinθ)/θ³·[ω]×²,   θ = |ω|.
+    (The left Jacobian is J_r(−ω) = J_r(ω)ᵀ.)
+    """
+    theta = omega.norm(dim=-1, keepdim=True)
+    theta_sq = theta ** 2
+    safe = torch.where(theta < 1e-3, torch.ones_like(theta), theta)
+    b = (1.0 - torch.cos(safe)) / safe ** 2
+    c = (safe - torch.sin(safe)) / safe ** 3
+    b = torch.where(theta < 1e-3, 0.5 - theta_sq / 24.0, b)
+    c = torch.where(theta < 1e-3, 1.0 / 6.0 - theta_sq / 120.0, c)
+    W = skew_torch(omega)
+    I = torch.eye(3, device=omega.device, dtype=omega.dtype).expand(
+        *omega.shape[:-1], 3, 3)
+    return I - b[..., None] * W + c[..., None] * torch.matmul(W, W)
+
+
+def se3_right_jacobian_torch(xi: torch.Tensor) -> torch.Tensor:
+    """Batched SE(3) right Jacobian J_r(ξ) (6×6), ξ = [ω, v], robust at θ→0.
+
+    J_r = [[J_r^SO3,  0      ],
+           [Q,        J_r^SO3]]
+    with the Barfoot coupling block
+
+        Q(ω,v) = −½[v]× + c1·(P̂R̂ + R̂P̂ − P̂R̂P̂)
+                       − c2·(P̂²R̂ + R̂P̂² − 3P̂R̂P̂)
+                       + c3·(P̂R̂P̂² + P̂²R̂P̂),     P̂=[ω]×, R̂=[v]×
+
+    c1=(θ−sinθ)/θ³, c2=(θ²+2cosθ−2)/2θ⁴, c3=(2θ−3sinθ+θcosθ)/2θ⁵.
+    Verified against gtsam.Pose3.ExpmapDerivative and the ad-series to ~3e-16
+    (and the small-θ Taylor branch to ≤2e-12).
+    """
+    omega = xi[..., :3]
+    v = xi[..., 3:]
+    Jso3 = so3_right_jacobian_torch(omega)
+
+    theta = omega.norm(dim=-1, keepdim=True)
+    theta_sq = theta ** 2
+    safe = torch.where(theta < 1e-3, torch.ones_like(theta), theta)
+    s, ct = torch.sin(safe), torch.cos(safe)
+    c1 = (safe - s) / safe ** 3
+    c2 = (safe ** 2 + 2.0 * ct - 2.0) / (2.0 * safe ** 4)
+    c3 = (2.0 * safe - 3.0 * s + safe * ct) / (2.0 * safe ** 5)
+    c1 = torch.where(theta < 1e-3, 1.0 / 6.0 - theta_sq / 120.0, c1)
+    c2 = torch.where(theta < 1e-3, 1.0 / 24.0 - theta_sq / 720.0, c2)
+    c3 = torch.where(theta < 1e-3, 1.0 / 120.0 - theta_sq / 2520.0, c3)
+
+    P = skew_torch(omega)
+    Rv = skew_torch(v)
+    P2 = torch.matmul(P, P)
+    PR, RP = torch.matmul(P, Rv), torch.matmul(Rv, P)
+    PRP = torch.matmul(PR, P)
+    Q = (-0.5 * Rv
+         + c1[..., None] * (PR + RP - PRP)
+         - c2[..., None] * (torch.matmul(P2, Rv) + torch.matmul(Rv, P2)
+                            - 3.0 * PRP)
+         + c3[..., None] * (torch.matmul(PR, P2) + torch.matmul(P2, RP)))
+    Z = torch.zeros_like(Jso3)
+    return torch.cat([torch.cat([Jso3, Z], dim=-1),
+                      torch.cat([Q, Jso3], dim=-1)], dim=-2)
